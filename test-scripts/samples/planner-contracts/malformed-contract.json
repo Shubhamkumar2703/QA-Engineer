@@ -1,0 +1,7 @@
+{
+  "workflow_version": "1.0",
+  "ingestion_timestamp": "2026-07-29T09:15:00.000Z",
+  "agent": "api",
+  "verification_type": "api",
+  "next_node": "API Agent"
+}
