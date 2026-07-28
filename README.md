@@ -25,5 +25,7 @@ import the latest workflow JSON from `n8n/workflows/`.
 
 ## Status
 
-Milestone 1, Task 1 (repository + Docker Compose + n8n + Postgres) — see
+Milestone 1. Task 1 (repository + Docker Compose + n8n + Postgres) is
+still in progress. Task 2 (Excel ingestion workflow, `n8n/workflows/01-ingestion.json`)
+has been built but not yet verified inside a running n8n instance — see
 `docs/architecture/milestone-1.md` for the full task breakdown.
