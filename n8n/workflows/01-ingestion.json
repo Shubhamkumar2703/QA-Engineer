@@ -1,0 +1,169 @@
+{
+  "name": "01 - Excel Ingestion",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -40],
+      "parameters": {
+        "width": 380,
+        "height": 260,
+        "content": "## Milestone 1 - Task 2: Excel Ingestion\n\nReads a test script from `test-scripts/samples/`, drops empty rows, and normalizes each remaining row into the shared Test Case JSON schema (docs/architecture/milestone-1.md, section 7).\n\nEach normalized object is handed to the **Planner** node - this workflow does not call the Planner's logic itself. API Agent, Decision Agent, Documentation Agent and Jira Agent are out of scope for this task."
+      }
+    },
+    {
+      "id": "trigger-local-file",
+      "name": "Test Script Folder Trigger",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [-140, 260],
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "/data/test-scripts/samples",
+        "events": ["add"],
+        "options": {}
+      }
+    },
+    {
+      "id": "read-file-from-disk",
+      "name": "Read Test Script File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [80, 260],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $json.path }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "spreadsheet-file-node",
+      "name": "Parse Excel Rows",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [300, 260],
+      "parameters": {
+        "operation": "fromFile",
+        "binaryPropertyName": "data",
+        "options": {
+          "headerRow": true
+        }
+      }
+    },
+    {
+      "id": "filter-empty-rows",
+      "name": "Filter Empty Rows",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [520, 260],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-test-id-not-empty",
+              "leftValue": "={{ $json['Test ID'] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize-code-node",
+      "name": "Normalize To Test Case JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Normalizes one Excel row into the shared Test Case JSON schema.\n// See docs/architecture/milestone-1.md, section 7, for the field contract.\n// Only ingestion-known fields are populated here; every other field is\n// left null for downstream agents to fill in - ingestion never guesses\n// values that belong to a later stage.\nconst row = $input.item.json;\n\nconst testCase = {\n  test_id: String(row['Test ID']).trim(),\n  description: row['Description'] ? String(row['Description']).trim() : null,\n  steps: row['Steps'] ? String(row['Steps']).trim() : null,\n  expected_result: row['Expected Result'] ? String(row['Expected Result']).trim() : null,\n  actual_result: null,\n  status: null,\n  confidence: null,\n  evidence: null,\n  next_action: null,\n  verification_type: row['Verification Type'] ? String(row['Verification Type']).trim() : null,\n  tester: 'AI-Agent',\n  date: null,\n  notes: null,\n  agent_reasoning: null,\n  jira_key: null,\n  run_id: $execution.id,\n  workflow_version: null,\n  prompt_version: null,\n  model_version: null,\n  repo_commit: null,\n  timestamp: new Date().toISOString(),\n  human_verdict: null\n};\n\nreturn { json: testCase };"
+      }
+    },
+    {
+      "id": "planner-handoff",
+      "name": "Planner",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 260],
+      "notes": "Hand-off boundary to the Planner Agent. Planner routing logic is not part of Task 2 (Excel Ingestion) and is built in a later task.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Test Script Folder Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Test Script File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Test Script File": {
+      "main": [
+        [
+          {
+            "node": "Parse Excel Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Excel Rows": {
+      "main": [
+        [
+          {
+            "node": "Filter Empty Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Empty Rows": {
+      "main": [
+        [
+          {
+            "node": "Normalize To Test Case JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize To Test Case JSON": {
+      "main": [
+        [
+          {
+            "node": "Planner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

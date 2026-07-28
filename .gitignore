@@ -1,0 +1,8 @@
+.env
+reports/*
+!reports/.gitkeep
+n8n_data/
+pg_data/
+__pycache__/
+*.pyc
+.DS_Store
