@@ -27,10 +27,21 @@ in `n8n/workflows/`, numbered in execution order.
 | File | Workflow `name` field |
 |---|---|
 | `01-ingestion.json` | `01 - Excel Ingestion` |
-| `02-api-agent.json` | `02 - API Agent` |
-| `03-decision-agent.json` | `03 - Decision Agent` |
-| `04-documentation-agent.json` | `04 - Documentation Agent` |
-| `05-jira-agent.json` | `05 - Jira Agent` |
+| `02-api-request-builder.json` | `02 - API Request Builder` |
+| `03-http-executor.json` (planned, Task 3.2) | `03 - HTTP Executor` |
+| `04-response-normalizer.json` (planned, Task 3.3) | `04 - Response Normalizer` |
+| `05-decision-agent.json` (planned) | `05 - Decision Agent` |
+| `06-documentation-agent.json` (planned) | `06 - Documentation Agent` |
+| `07-jira-agent.json` (planned) | `07 - Jira Agent` |
+
+**Numbering note (Task 3.1):** `docs/architecture/repository-design.md`
+section 1 lists an earlier, coarser numbering (`02-api-agent.json` through
+`05-jira-agent.json`) from before "API Agent" was split into the
+sub-workflows above (Task 3.1/3.2/3.3). That split is what actually
+happened, so this table is the current source of truth for file numbers;
+`repository-design.md`'s file tree is stale on this specific point and
+should be refreshed the next time that document is touched, rather than
+as a standalone edit under this task's scope.
 
 The workflow's internal `name` field always matches its file, prefixed
 with the same two-digit number, so the n8n UI list and the repo listing
