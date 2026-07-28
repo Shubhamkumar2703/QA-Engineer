@@ -6,11 +6,23 @@
       "name": "Scope Note",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-140, -40],
+      "position": [-140, -180],
       "parameters": {
         "width": 380,
-        "height": 260,
-        "content": "## Milestone 1 - Task 2: Excel Ingestion\n\nReads a test script from `test-scripts/samples/`, drops empty rows, and normalizes each remaining row into the shared Test Case JSON schema (docs/architecture/milestone-1.md, section 7).\n\nEach normalized object is handed to the **Planner** node - this workflow does not call the Planner's logic itself. API Agent, Decision Agent, Documentation Agent and Jira Agent are out of scope for this task."
+        "height": 300,
+        "content": "## Milestone 1 - Task 2: Excel Ingestion\n\nReads a test script from `test-scripts/samples/`, drops empty rows, validates each remaining row, and normalizes it into the shared Test Case JSON schema (docs/architecture/milestone-1.md, section 7, extended with ingestion metadata - see docs/contracts/planner-contract.md).\n\nEach valid row is handed to the **Planner** node wrapped in the standard routing contract. Invalid rows are handed to Planner as a standard ERROR payload instead (docs/contracts/error-payload.md). This workflow does not implement Planner routing logic, API calls, Decision Agent, Documentation Agent or Jira Agent - those stay out of scope."
+      }
+    },
+    {
+      "id": "sticky-contract-note",
+      "name": "Contract Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1180, -180],
+      "parameters": {
+        "width": 460,
+        "height": 300,
+        "content": "## Task 2.5: Workflow Standards\n\n`Normalize To Test Case JSON` is the only node that validates row content; `Build Planner Routing Contract` is the only node that decides where a valid test case is routed. Both reuse the shared shapes documented in `docs/contracts/`:\n\n- `docs/contracts/planner-contract.md` - the envelope sent to Planner for valid test cases\n- `docs/contracts/error-payload.md` - the shared error object, reused by every future workflow\n\nSee `docs/workflow-standards.md` for the naming/versioning conventions every future workflow (API Agent, Decision Agent, Documentation Agent, Jira Agent) must follow."
       }
     },
     {
@@ -53,11 +65,23 @@
       }
     },
     {
+      "id": "map-columns-node",
+      "name": "Map Excel Columns & Tag Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Single source of truth for the Excel template's raw column headers.\n// Every node downstream of this one only ever sees the canonical\n// snake_case field names on the left - if the Excel template's column\n// headers change, this map is the only thing that needs editing.\nconst COLUMN_MAP = {\n  test_id: 'Test ID',\n  description: 'Description',\n  steps: 'Steps',\n  expected_result: 'Expected Result',\n  verification_type: 'Verification Type'\n};\n\nconst raw = $input.item.json;\n\n// Every test case in a single execution comes from the same triggered\n// file, so the source file name can be read once from the trigger node.\nconst triggerPath = $('Test Script Folder Trigger').first().json.path;\nconst sourceFile = String(triggerPath).split(/[\\\\/]/).pop();\n\nconst mapped = {};\nfor (const [canonicalKey, excelHeader] of Object.entries(COLUMN_MAP)) {\n  const value = raw[excelHeader];\n  mapped[canonicalKey] = (value === undefined || value === null || value === '')\n    ? null\n    : String(value).trim();\n}\n\n// Row metadata is stamped here, before the empty-row filter, so\n// row_number always reflects the row's real position in the source\n// file even after blank/invalid rows are dropped further downstream.\nmapped.__source_file = sourceFile;\nmapped.__row_number = $itemIndex + 2; // +2: row 1 is the header row\n\nreturn { json: mapped };"
+      }
+    },
+    {
       "id": "filter-empty-rows",
       "name": "Filter Empty Rows",
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2,
-      "position": [520, 260],
+      "position": [740, 260],
       "parameters": {
         "conditions": {
           "options": {
@@ -69,7 +93,7 @@
           "conditions": [
             {
               "id": "cond-test-id-not-empty",
-              "leftValue": "={{ $json['Test ID'] }}",
+              "leftValue": "={{ $json['test_id'] }}",
               "rightValue": "",
               "operator": {
                 "type": "string",
@@ -83,15 +107,39 @@
       }
     },
     {
+      "id": "flag-duplicate-ids-node",
+      "name": "Flag Duplicate Test IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 260],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Needs visibility across every row in the file at once, so this runs\n// once for the whole batch rather than once per item. Flags rows whose\n// test_id repeats - a duplicate would silently overwrite itself in the\n// Excel report and in the Jira duplicate-ticket lookup later, so it must\n// surface as a data-quality error instead.\nconst items = $input.all();\nconst counts = {};\n\nfor (const item of items) {\n  const id = item.json.test_id;\n  counts[id] = (counts[id] || 0) + 1;\n}\n\nreturn items.map((item) => ({\n  json: {\n    ...item.json,\n    __duplicate_test_id: counts[item.json.test_id] > 1\n  }\n}));"
+      }
+    },
+    {
       "id": "normalize-code-node",
       "name": "Normalize To Test Case JSON",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [740, 260],
+      "position": [1180, 260],
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Normalizes one Excel row into the shared Test Case JSON schema.\n// See docs/architecture/milestone-1.md, section 7, for the field contract.\n// Only ingestion-known fields are populated here; every other field is\n// left null for downstream agents to fill in - ingestion never guesses\n// values that belong to a later stage.\nconst row = $input.item.json;\n\nconst testCase = {\n  test_id: String(row['Test ID']).trim(),\n  description: row['Description'] ? String(row['Description']).trim() : null,\n  steps: row['Steps'] ? String(row['Steps']).trim() : null,\n  expected_result: row['Expected Result'] ? String(row['Expected Result']).trim() : null,\n  actual_result: null,\n  status: null,\n  confidence: null,\n  evidence: null,\n  next_action: null,\n  verification_type: row['Verification Type'] ? String(row['Verification Type']).trim() : null,\n  tester: 'AI-Agent',\n  date: null,\n  notes: null,\n  agent_reasoning: null,\n  jira_key: null,\n  run_id: $execution.id,\n  workflow_version: null,\n  prompt_version: null,\n  model_version: null,\n  repo_commit: null,\n  timestamp: new Date().toISOString(),\n  human_verdict: null\n};\n\nreturn { json: testCase };"
+        "jsCode": "// Validates one mapped row and, if valid, builds the shared Test Case\n// JSON object (docs/architecture/milestone-1.md, section 7, plus the\n// ingestion metadata required by docs/contracts/planner-contract.md).\n// Invalid rows return the shared ERROR payload instead\n// (docs/contracts/error-payload.md) - they never reach the Planner as a\n// test case.\nconst WORKFLOW_VERSION = '1.0';\nconst SUPPORTED_VERIFICATION_TYPES = ['api'];\n\nconst row = $input.item.json;\nconst ingestionTimestamp = new Date().toISOString();\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: 'ingestion',\n    code,\n    message,\n    details: details || {},\n    timestamp: ingestionTimestamp,\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst requiredFields = ['test_id', 'description', 'steps', 'expected_result', 'verification_type'];\nconst missing = requiredFields.filter((field) => !row[field]);\n\nif (missing.length > 0) {\n  return { json: errorPayload(\n    'MISSING_REQUIRED_FIELD',\n    `Row ${row.__row_number} in ${row.__source_file} is missing required field(s): ${missing.join(', ')}`,\n    { source_file: row.__source_file, row_number: row.__row_number, missing_fields: missing }\n  ) };\n}\n\nif (!SUPPORTED_VERIFICATION_TYPES.includes(row.verification_type)) {\n  return { json: errorPayload(\n    'UNSUPPORTED_VERIFICATION_TYPE',\n    `Row ${row.__row_number} in ${row.__source_file} has an unsupported verification_type: \"${row.verification_type}\". Milestone 1 only supports: ${SUPPORTED_VERIFICATION_TYPES.join(', ')}`,\n    { source_file: row.__source_file, row_number: row.__row_number, verification_type: row.verification_type }\n  ) };\n}\n\nif (row.__duplicate_test_id) {\n  return { json: errorPayload(\n    'DUPLICATE_TEST_ID',\n    `Test ID \"${row.test_id}\" appears more than once in ${row.__source_file}`,\n    { source_file: row.__source_file, row_number: row.__row_number, test_id: row.test_id }\n  ) };\n}\n\nconst testCase = {\n  test_id: row.test_id,\n  description: row.description,\n  steps: row.steps,\n  expected_result: row.expected_result,\n  actual_result: null,\n  status: null,\n  confidence: null,\n  evidence: null,\n  next_action: null,\n  verification_type: row.verification_type,\n  tester: 'AI-Agent',\n  date: null,\n  notes: null,\n  agent_reasoning: null,\n  jira_key: null,\n  run_id: $execution.id,\n  workflow_version: WORKFLOW_VERSION,\n  prompt_version: null,\n  model_version: null,\n  repo_commit: null,\n  timestamp: ingestionTimestamp,\n  human_verdict: null,\n  source_file: row.__source_file,\n  row_number: row.__row_number,\n  ingestion_timestamp: ingestionTimestamp\n};\n\nreturn { json: testCase };"
+      }
+    },
+    {
+      "id": "planner-contract-node",
+      "name": "Build Planner Routing Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Wraps a valid test case in the standard Planner routing contract\n// (docs/contracts/planner-contract.md). AGENT_ROUTES is the only place\n// that maps a verification_type to a downstream agent/node - adding\n// repository/database/ui agents in later milestones means adding a line\n// here, not reshaping this workflow or any existing consumer.\nconst AGENT_ROUTES = {\n  api: { agent: 'api', next_node: 'API Agent' }\n};\nconst WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\n\n// ERROR payloads from the previous step are not test cases and must not\n// be routed to an agent - pass them through unchanged.\nif (item.status === 'ERROR') {\n  return { json: item };\n}\n\nconst route = AGENT_ROUTES[item.verification_type];\n\nif (!route) {\n  return { json: {\n    status: 'ERROR',\n    stage: 'planner_routing',\n    code: 'NO_ROUTE_FOR_VERIFICATION_TYPE',\n    message: `No agent route configured for verification_type \"${item.verification_type}\"`,\n    details: { test_id: item.test_id, verification_type: item.verification_type },\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  } };\n}\n\nreturn { json: {\n  workflow_version: WORKFLOW_VERSION,\n  ingestion_timestamp: item.ingestion_timestamp,\n  agent: route.agent,\n  verification_type: item.verification_type,\n  next_node: route.next_node,\n  test_case: item\n} };"
       }
     },
     {
@@ -99,8 +147,8 @@
       "name": "Planner",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [960, 260],
-      "notes": "Hand-off boundary to the Planner Agent. Planner routing logic is not part of Task 2 (Excel Ingestion) and is built in a later task.",
+      "position": [1620, 260],
+      "notes": "Hand-off boundary to the Planner Agent. Receives either a routing contract (valid test case) or an ERROR payload (invalid row) - see docs/contracts/. Planner routing logic itself is not part of Task 2/2.5 and is built in a later task.",
       "parameters": {}
     }
   ],
@@ -131,6 +179,17 @@
       "main": [
         [
           {
+            "node": "Map Excel Columns & Tag Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Excel Columns & Tag Metadata": {
+      "main": [
+        [
+          {
             "node": "Filter Empty Rows",
             "type": "main",
             "index": 0
@@ -142,6 +201,17 @@
       "main": [
         [
           {
+            "node": "Flag Duplicate Test IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Duplicate Test IDs": {
+      "main": [
+        [
+          {
             "node": "Normalize To Test Case JSON",
             "type": "main",
             "index": 0
@@ -150,6 +220,17 @@
       ]
     },
     "Normalize To Test Case JSON": {
+      "main": [
+        [
+          {
+            "node": "Build Planner Routing Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Planner Routing Contract": {
       "main": [
         [
           {
