@@ -1,0 +1,277 @@
+{
+  "name": "03 - HTTP Executor",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -260],
+      "parameters": {
+        "width": 440,
+        "height": 340,
+        "content": "## Milestone 1 - Task 3.2: HTTP Executor\n\nConsumes the API Request Contract produced by 02-api-request-builder (docs/contracts/api-request-contract.md), executes it with n8n's native HTTP Request node, and returns the standard HTTP Response Contract (docs/contracts/http-response-contract.md).\n\nThis workflow only *executes and captures* the response - it never compares against `expected`, never decides PASS/FAIL, and never calls an AI model. That is the Decision Agent's job (docs/architecture/milestone-1.md section 5), out of scope here.\n\nInvalid input, an unreachable target, or a timeout all produce the shared ERROR payload (docs/contracts/error-payload.md) instead - never silently dropped, never thrown in a way that kills the rest of the batch."
+      }
+    },
+    {
+      "id": "sticky-contract-note",
+      "name": "Contract Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1140, -260],
+      "parameters": {
+        "width": 460,
+        "height": 340,
+        "content": "## Task 3.2 design notes\n\n- `Apply Authentication` is the only node that reads a real credential (from this workflow's own environment variables, e.g. API_AUTH_BEARER_TOKEN) - the API Request Contract's `authentication` field only ever carries a strategy marker, per ADR 002 and docs/contracts/api-request-contract.md.\n- The HTTP Request node is configured with `neverError` so 4xx/5xx responses are captured as normal data (`status_code` on the response contract), not thrown as node errors. Genuine execution failures (DNS, connection refused, timeout, malformed URL) route through the node's error output into `Build Network Error Payload` instead.\n- `Route Validation Errors` skips the HTTP Request node entirely for items that already failed validation, so this workflow never attempts to send a request built from an invalid contract."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "API Request Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 260],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-api-request-contract-node",
+      "name": "Validate API Request Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Confirms the incoming item is a well-formed API Request Contract\n// (docs/contracts/api-request-contract.md) before any HTTP-specific\n// validation or execution happens. This is the only node that validates\n// the contract's envelope shape - later nodes trust it and only validate\n// their own narrow concern.\nconst STAGE = 'http_executor';\nconst WORKFLOW_VERSION = '1.0';\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\n// ERROR payloads produced upstream (API Request Builder) are not request\n// contracts and must not be re-validated as one - pass them through\n// unchanged, same convention as 01-ingestion and 02-api-request-builder.\nif (item && item.status === 'ERROR') {\n  return { json: item };\n}\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    'API Request Contract must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nconst requiredFields = [\n  'workflow_version', 'contract_version', 'request_id', 'method',\n  'base_url', 'path', 'url', 'headers', 'query', 'authentication',\n  'timeout', 'expected', 'test_case', 'metadata'\n];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    `API Request Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields, request_id: item.request_id || null }\n  ) };\n}\n\nif (typeof item.headers !== 'object' || item.headers === null || Array.isArray(item.headers)) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    'API Request Contract headers must be a JSON object',\n    { request_id: item.request_id }\n  ) };\n}\n\nif (typeof item.query !== 'object' || item.query === null || Array.isArray(item.query)) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    'API Request Contract query must be a JSON object',\n    { request_id: item.request_id }\n  ) };\n}\n\nif (typeof item.authentication !== 'object' || item.authentication === null || !item.authentication.type) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    'API Request Contract authentication must be an object with a type',\n    { request_id: item.request_id }\n  ) };\n}\n\nif (typeof item.timeout !== 'number' || item.timeout <= 0) {\n  return { json: errorPayload(\n    'INVALID_API_REQUEST_CONTRACT',\n    `API Request Contract timeout must be a positive number, received \"${item.timeout}\"`,\n    { request_id: item.request_id, timeout: item.timeout }\n  ) };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "validate-url-and-method-node",
+      "name": "Validate URL And Method",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Re-validates method and URL independently of the API Request Builder -\n// defense in depth, this workflow must not trust a malformed or\n// hand-crafted contract just because it has the right shape. No AI, no\n// inference - fixed whitelist and native URL parsing only.\nconst STAGE = 'http_executor';\nconst WORKFLOW_VERSION = '1.0';\nconst SUPPORTED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\nif (item.status === 'ERROR') {\n  return { json: item };\n}\n\nconst method = String(item.method).trim().toUpperCase();\n\nif (!SUPPORTED_METHODS.includes(method)) {\n  return { json: errorPayload(\n    'UNSUPPORTED_HTTP_METHOD',\n    `HTTP method \"${method}\" is not supported. Supported methods: ${SUPPORTED_METHODS.join(', ')}`,\n    { request_id: item.request_id, method }\n  ) };\n}\n\nlet parsedUrl;\ntry {\n  parsedUrl = new URL(item.url);\n} catch (err) {\n  return { json: errorPayload(\n    'INVALID_URL',\n    `\"${item.url}\" is not a valid URL`,\n    { request_id: item.request_id, url: item.url }\n  ) };\n}\n\nif (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {\n  return { json: errorPayload(\n    'INVALID_URL',\n    `URL \"${item.url}\" must use http or https, received \"${parsedUrl.protocol}\"`,\n    { request_id: item.request_id, url: item.url }\n  ) };\n}\n\nreturn { json: { ...item, __method: method, __url: item.url } };"
+      }
+    },
+    {
+      "id": "apply-authentication-node",
+      "name": "Apply Authentication",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Merges request headers with a resolved credential for bearer/api_key\n// auth strategies, read from this workflow's own environment variables -\n// never from the API Request Contract, which per ADR 002 / the API\n// Request Contract's Authentication structure only ever carries a\n// strategy marker, never a real secret. This is the \"resolved_by:\n// http_executor\" step that contract document promises. Also resolves\n// query/body/timeout into the working fields the HTTP Request node reads.\nconst STAGE = 'http_executor';\nconst WORKFLOW_VERSION = '1.0';\nconst SUPPORTED_AUTH_TYPES = ['none', 'bearer', 'api_key'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\nif (item.status === 'ERROR') {\n  return { json: item };\n}\n\nconst authType = item.authentication && item.authentication.type\n  ? String(item.authentication.type).trim().toLowerCase()\n  : 'none';\n\nif (!SUPPORTED_AUTH_TYPES.includes(authType)) {\n  return { json: errorPayload(\n    'UNSUPPORTED_AUTHENTICATION',\n    `Authentication type \"${authType}\" is not supported. Supported types: ${SUPPORTED_AUTH_TYPES.join(', ')}`,\n    { request_id: item.request_id, auth_type: authType }\n  ) };\n}\n\nconst headers = { ...item.headers };\n\nif (authType === 'bearer') {\n  const token = $env.API_AUTH_BEARER_TOKEN;\n  if (!token) {\n    return { json: errorPayload(\n      'MISSING_CREDENTIALS',\n      'Authentication type \"bearer\" requires API_AUTH_BEARER_TOKEN to be set',\n      { request_id: item.request_id, auth_type: authType, required_env: 'API_AUTH_BEARER_TOKEN' }\n    ) };\n  }\n  headers.Authorization = `Bearer ${token}`;\n}\n\nif (authType === 'api_key') {\n  const headerName = $env.API_AUTH_API_KEY_HEADER || 'X-API-Key';\n  const value = $env.API_AUTH_API_KEY_VALUE;\n  if (!value) {\n    return { json: errorPayload(\n      'MISSING_CREDENTIALS',\n      'Authentication type \"api_key\" requires API_AUTH_API_KEY_VALUE to be set',\n      { request_id: item.request_id, auth_type: authType, required_env: 'API_AUTH_API_KEY_VALUE' }\n    ) };\n  }\n  headers[headerName] = value;\n}\n\nreturn { json: {\n  ...item,\n  __headers: headers,\n  __query: item.query || {},\n  __body: item.body === undefined ? null : item.body,\n  __timeout: item.timeout,\n  __sent_at: new Date().toISOString(),\n  __start_ms: Date.now()\n} };"
+      }
+    },
+    {
+      "id": "route-validation-errors-node",
+      "name": "Route Validation Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [740, 260],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-request-node",
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 380],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "={{ $json.__method }}",
+        "url": "={{ $json.__url }}",
+        "authentication": "none",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify($json.__query) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.__headers) }}",
+        "sendBody": "={{ $json.__body !== null }}",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.__body) }}",
+        "options": {
+          "timeout": "={{ $json.__timeout }}",
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "build-http-response-contract-node",
+      "name": "Build HTTP Response Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 300],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Final assembly for a request that actually executed (any status code,\n// including 4xx/5xx - the HTTP Request node is configured with\n// neverError so those are not thrown as node errors). Builds the HTTP\n// Response Contract (docs/contracts/http-response-contract.md). This\n// workflow never compares status_code against `expected` or decides\n// PASS/FAIL - that is the Decision Agent's job (docs/architecture/\n// milestone-1.md section 5), not this one's.\nconst CONTRACT_VERSION = '1.0';\nconst EXECUTOR_WORKFLOW_VERSION = '1.0';\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst requestItem = $('Apply Authentication').item.json;\nconst httpResult = $input.item.json;\nconst receivedAt = new Date().toISOString();\n\nconst responseContract = {\n  workflow_version: EXECUTOR_WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: requestItem.request_id,\n  response_id: uuidv4(),\n  status_code: httpResult.statusCode,\n  status_text: httpResult.statusMessage || null,\n  headers: httpResult.headers || {},\n  body: httpResult.body !== undefined ? httpResult.body : null,\n  latency_ms: Date.now() - requestItem.__start_ms,\n  timestamps: {\n    sent_at: requestItem.__sent_at,\n    received_at: receivedAt\n  },\n  request: {\n    method: requestItem.__method,\n    url: requestItem.__url\n  },\n  expected: requestItem.expected,\n  test_case: requestItem.test_case,\n  metadata: {\n    created_at: receivedAt,\n    source_workflow: '03-http-executor',\n    next_workflow: '04-response-normalizer'\n  }\n};\n\nreturn { json: responseContract };"
+      }
+    },
+    {
+      "id": "build-network-error-payload-node",
+      "name": "Build Network Error Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 460],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Handles the HTTP Request node's error output - a genuine execution\n// failure (DNS/connection/timeout/malformed request), as opposed to a\n// non-2xx HTTP status, which is captured as a normal response instead\n// because the node is configured with neverError. Maps n8n's raw error\n// to one of this workflow's stable error codes on a best-effort basis;\n// anything unrecognized falls back to NETWORK_ERROR rather than being\n// dropped. Different HTTP clients (axios, undici/fetch) surface the same\n// underlying failure differently - some put ECONNREFUSED/ETIMEDOUT in\n// `code`, some in `message`, some nest it under `cause` - so every field\n// that might carry the real reason is folded into one string before\n// matching, rather than trusting a single field to be present.\nconst STAGE = 'http_executor';\nconst WORKFLOW_VERSION = '1.0';\n\nconst requestItem = $('Apply Authentication').item.json;\nconst rawError = $input.item.json;\n\nconst parts = [\n  rawError.code,\n  rawError.error,\n  rawError.message,\n  rawError.cause && rawError.cause.code,\n  rawError.cause && rawError.cause.message,\n  rawError.name\n].filter(Boolean);\nconst message = parts.length > 0 ? parts.join(' | ') : JSON.stringify(rawError);\n\nfunction codeFor(msg) {\n  const lower = msg.toLowerCase();\n  if (lower.includes('econnrefused')) return 'CONNECTION_REFUSED';\n  if (lower.includes('etimedout') || lower.includes('econnaborted') || lower.includes('timeout') || lower.includes('abort')) return 'TIMEOUT_ERROR';\n  if (lower.includes('enotfound') || lower.includes('eai_again')) return 'DNS_RESOLUTION_FAILED';\n  if (lower.includes('invalid url') || lower.includes('err_invalid_url')) return 'INVALID_URL';\n  return 'NETWORK_ERROR';\n}\n\nreturn { json: {\n  status: 'ERROR',\n  stage: STAGE,\n  code: codeFor(message),\n  message: `HTTP request for request_id \"${requestItem.request_id}\" failed: ${message}`,\n  details: {\n    request_id: requestItem.request_id,\n    method: requestItem.__method,\n    url: requestItem.__url\n  },\n  timestamp: new Date().toISOString(),\n  workflow_version: WORKFLOW_VERSION\n} };"
+      }
+    },
+    {
+      "id": "response-normalizer-handoff",
+      "name": "Response Normalizer",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1420, 260],
+      "notes": "Hand-off boundary to the Response Normalizer workflow (Task 3.3, not yet built). Receives either an HTTP Response Contract (docs/contracts/http-response-contract.md) or an ERROR payload (docs/contracts/error-payload.md). No response normalization or pass/fail comparison happens in this workflow.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "API Request Contract Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate API Request Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate API Request Contract": {
+      "main": [
+        [
+          {
+            "node": "Validate URL And Method",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate URL And Method": {
+      "main": [
+        [
+          {
+            "node": "Apply Authentication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Authentication": {
+      "main": [
+        [
+          {
+            "node": "Route Validation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Validation Errors": {
+      "main": [
+        [
+          {
+            "node": "Response Normalizer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Build HTTP Response Contract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Network Error Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTTP Response Contract": {
+      "main": [
+        [
+          {
+            "node": "Response Normalizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Network Error Payload": {
+      "main": [
+        [
+          {
+            "node": "Response Normalizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
