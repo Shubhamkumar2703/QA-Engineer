@@ -71,8 +71,8 @@ File: [`decision-contract.md`](./decision-contract.md)
 
 | | |
 |---|---|
-| Producer | The future Decision Agent workflow (Task 4, not yet built) |
-| Consumer | The future Documentation Agent (every verdict) and Jira Agent (`next_action: "create_jira"` only), Task 4+, not yet built |
+| Producer | `n8n/workflows/05-decision-orchestrator.json` (Task 4.1) |
+| Consumer | The future Documentation Agent (every verdict) and Jira Agent (`next_action: "create_jira"` only), Task 4.2+, not yet built |
 | Current version | `workflow_version: "1.0"`, `contract_version: "1.0"` |
 | Purpose | The `{status, confidence, reasoning, evidence, next_action}` verdict shape from ADR 004 / `milestone-1.md` section 5, updated per ADR 005 (`MANUAL_REVIEW` replaces `NOT_RUN`, `update_jira` dropped, `flag_for_review` added). The first contract in the pipeline whose producer may call an AI model - every contract before it is produced by an AI-free workflow. Full reasoning design: `docs/architecture/decision-agent-design.md`. |
 | Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `contract_version`. Carries `test_case` forward unchanged, same as every prior contract. Adds `decision_basis` (new) so a $0 deterministic verdict and a paid model call are distinguishable per instance, for both cost tracking and hallucination auditing. |

@@ -14,7 +14,8 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 3.1 - API Request Builder | `02-api-request-builder.json` | Built, not yet verified inside a running n8n instance |
 | Task 3.2 - HTTP Executor | `03-http-executor.json` | Built (`workflow_version: "1.1"` - see Task 3.3 defect-fix note below). Node logic verified against a real target (httpbin.org) via a script harness outside n8n - see "Verification notes" below. Not yet imported/run inside a live n8n instance. |
 | Task 3.3 - Response Normalizer | `04-response-normalizer.json` | Built. Node logic verified with a script harness (197/197 checks) against synthetic HTTP Response Contracts and HTTP Executor ERROR payloads - see "Verification notes" below. Not yet imported/run inside a live n8n instance. |
-| Decision Agent | `05-decision-agent.json` | Not started |
+| Task 4.0 - Decision Agent foundations | `docs/contracts/decision-contract.md`, ADR 005, `prompts/decision-agent/v1.md` | Done - design layer only, no workflow. See `docs/reviews/task-4.0-decision-agent-foundations-review.md`. |
+| Task 4.1 - Decision Orchestrator | `05-decision-orchestrator.json` | Built. Tier 0/1 (deterministic) and Tier 2 (AI-assisted, response validation) logic verified with a script harness (50/50 checks) - see "Verification notes" below. AI call itself mocked (no live Anthropic credential in this environment) and not yet imported/run inside a live n8n instance. Deliberately does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery - later tasks. |
 | Documentation Agent | `06-documentation-agent.json` | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
@@ -53,11 +54,35 @@ requires. 197/197 checks passed, including that `request_id`,
 survive both the success path and every transport-failure path. Same
 live-n8n verification caveat as Task 3.2 applies.
 
+**Task 4.1 (Decision Orchestrator):** Same script-harness approach as
+Tasks 3.2/3.3 - the workflow's Code-node logic was extracted from the
+committed JSON and chained as n8n would connect the nodes. 50/50 checks
+passed, covering: Tier 0 (BLOCKED, zero AI calls), Tier 1 (PASS, zero AI
+calls), Tier 2 (exactly one AI call, evidence packet excludes
+request_id/response_id/test_case internals per the design doc), the
+confidence-threshold gate (a low-confidence PASS/FAIL from the model is
+downgraded to MANUAL_REVIEW without altering the reported confidence
+value), four distinct malformed-AI-output rejections (no tool_use block,
+invalid status enum, out-of-range confidence, non-string evidence
+entries), an AI-service-failure path (`AI_SERVICE_UNAVAILABLE`, one
+output still produced), and that an upstream ERROR payload is routed
+straight through without ever entering the tier engine or calling AI.
+**The AI call itself is mocked** - no live Anthropic credential was
+available in this environment, so the actual network call to Claude, and
+therefore real-world prompt quality/calibration, is unverified. See
+`docs/reviews/task-4.0-decision-agent-foundations-review.md` for the
+known gaps this doesn't close (confidence thresholds are uncalibrated
+placeholders; the few-shot examples are untested against a real model).
+
 ## Next up
 
-Task 4 - Decision Agent: consumes the Normalized Response Contract
-(`docs/contracts/normalized-response-contract.md`), compares
-`transport`/`response` against `expected`, and produces the
-`{status, confidence, reasoning, evidence, next_action}` verdict object
-specified in ADR 004 and `docs/architecture/milestone-1.md` section 5.
-This is the first workflow in the pipeline allowed to call an AI model.
+Per the Task 4 tree: 4.2 (Deterministic Tier Engine), 4.3 (AI Evaluation
+Node), 4.4 (Confidence & Hallucination Guards), 4.5 (Decision Contract
+Validation) - largely refinements/hardening of what 4.1 already built
+end-to-end (tier routing, the AI call, and basic schema validation all
+exist now; later tasks add grounding checks, retry logic, AI-failure
+recovery, and confidence recalibration on top, per their own scope).
+Before any of them: import `05-decision-orchestrator.json` into a real
+n8n instance with a real Anthropic credential and run at least one Tier
+2 case end-to-end - nothing about the actual AI call has been verified
+outside this environment's mocked harness.
