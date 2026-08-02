@@ -176,7 +176,39 @@ transport failure, normalizer-level error), not just the happy path.
   everything else (tier routing, evidence packet construction/exclusion
   rules, request building, response schema validation, the confidence
   gate, error handling) with a script harness that mocks the HTTP call's
-  response shape - 50/50 checks passed. Before trusting this in a real
-  run: import into live n8n with a real credential and check at least
-  one real Tier 2 call actually returns a `tool_use` block matching the
-  assumed shape - that assumption is unverified.
+  response shape - 50/50 checks passed at the time. Before trusting this
+  in a real run: import into live n8n with a real credential and check
+  at least one real Tier 2 call actually returns a `tool_use` block
+  matching the assumed shape - that assumption is unverified.
+
+## Task 4.2 (Decision Engine extraction) - things worth knowing
+
+- The task's evidence example (`{ type: "status_code", expected: 200,
+  actual: 200 }`) is an array of *objects*, but `decision-contract.md`
+  (which this task explicitly must not modify) documents `evidence` as
+  an array of *strings*. Resolved by keeping evidence as structured
+  objects only *inside* the Decision Engine (Tier 0/Tier 1 build them),
+  and rendering each to a descriptive string only in
+  `Decision Engine - Finalize`, right before the public contract fields
+  are written - the wire shape never changes, but the reusable
+  component's internals genuinely are structured now. If a future task
+  needs the Decision Contract's `evidence` field to actually carry
+  objects, that's a real `contract_version` bump, not a quiet drift -
+  don't let the renderer's presence become an excuse to skip that.
+- Tier 0/Tier 1/the final-assembly node were renamed to
+  `Decision Engine - Tier 0 (Transport)` / `Decision Engine - Tier 1
+  (Exact Match)` / `Decision Engine - Finalize` and given a dedicated
+  sticky note, but kept as an in-workflow node group rather than
+  extracted to a separate sub-workflow file. Every workflow in this
+  project so far "hands off" via a conceptual terminal NoOp, not a real
+  n8n Execute Workflow call - introducing that untested mechanism here
+  would have added risk beyond this task's scope. If a future task does
+  extract this into a real sub-workflow, the group's minimal external
+  coupling (everything it needs comes in via item fields the earlier
+  nodes already set) should make that a low-effort lift.
+- Reasoning/evidence-rendering wording changed slightly from Task 4.1
+  (e.g. Tier 1's reasoning now reads "Expected HTTP 200 and received
+  HTTP 200..." rather than "Expected status 200, received 200...") to
+  track the task's own literal example more closely. This is a content
+  change, not a shape change - `decision-contract.md` doesn't pin exact
+  wording, only field types.
