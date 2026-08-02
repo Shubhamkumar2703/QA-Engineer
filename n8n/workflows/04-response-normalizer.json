@@ -1,0 +1,204 @@
+{
+  "name": "04 - Response Normalizer",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -280],
+      "parameters": {
+        "width": 460,
+        "height": 360,
+        "content": "## Milestone 1 - Task 3.3: Response Normalizer\n\nConsumes whatever `03-http-executor` produced - a successful HTTP Response Contract (docs/contracts/http-response-contract.md) or an ERROR payload for a transport failure (timeout, connection refused, DNS failure, pre-flight validation) - and normalizes both into one stable Normalized Response Contract (docs/contracts/normalized-response-contract.md).\n\nThe Decision Agent (Task 4, not yet built) never sees a raw HTTP response and never knows which HTTP client executed the request - this workflow is that boundary. It never compares against `expected`, never decides PASS/FAIL, and never calls an AI model - those stay the Decision Agent's job.\n\nA transport failure is not a failure of THIS workflow - it is normalized into `transport.status: \"TIMEOUT\"` / `\"NETWORK_ERROR\"` / etc., same as any other result. Only a genuinely malformed or unrecognizable input produces this workflow's own shared ERROR payload."
+      }
+    },
+    {
+      "id": "sticky-contract-note",
+      "name": "Contract Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1180, -280],
+      "parameters": {
+        "width": 460,
+        "height": 360,
+        "content": "## Task 3.3 design notes\n\n- `__kind` (`'error'` or `'response'`) is set once, by `Validate Contract`, and is the only thing every later node checks to decide whether it's still looking at an in-progress item or has already produced this workflow's own ERROR payload (`!item.__kind` = short-circuit, pass through unchanged). This mirrors the `status === 'ERROR'` early-return convention in 01/02/03, but can't reuse that exact check here - a transport failure from 03 already has `status: 'ERROR'` and is exactly the input this workflow is supposed to normalize, not pass through.\n- `TRANSPORT_CODE_MAP` in `Normalize Transport` is a hand-kept allow-list mapping every `03-http-executor` error `code` to a transport category, same pattern as `SUPPORTED_VERIFICATION_TYPES`/`AGENT_ROUTES` in `01-ingestion.json` (docs/workflow-standards.md). A `03-http-executor` code with no entry here produces `UNKNOWN_TRANSPORT_ERROR` rather than a silent guess.\n- `request_id`/`test_case`/`expected` are read from `item.details` on the transport-failure path (03 v1.1 carries them there) and from the top level on the successful-response path - see docs/contracts/http-response-contract.md's versioning notes."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "HTTP Response Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 260],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-contract-node",
+      "name": "Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Determines whether the incoming item is a transport failure (an ERROR\n// payload from 03-http-executor, stage \"http_executor\") or a genuine\n// HTTP Response Contract, and confirms whichever shape it claims to be\n// is actually well-formed. This is the only node that validates input\n// shape - every later node trusts __kind and the fields it implies.\nconst STAGE = 'response_normalizer';\nconst WORKFLOW_VERSION = '1.0';\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_HTTP_RESPONSE_CONTRACT',\n    'Input to the Response Normalizer must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nif (item.status === 'ERROR') {\n  // A transport failure from the HTTP Executor (timeout, connection\n  // refused, DNS failure, pre-flight validation failure, ...) - this\n  // workflow's whole job is to normalize exactly this into a transport\n  // category, not to pass it through untouched the way 01/02/03 pass\n  // through an upstream error that isn't theirs to handle. It still has\n  // to look like a well-formed shared Error Payload first.\n  const requiredErrorFields = ['status', 'stage', 'code', 'message', 'details', 'timestamp', 'workflow_version'];\n  const missing = requiredErrorFields.filter((f) => item[f] === undefined);\n  if (missing.length > 0) {\n    return { json: errorPayload(\n      'INVALID_HTTP_RESPONSE_CONTRACT',\n      `Upstream ERROR payload is missing required field(s): ${missing.join(', ')}`,\n      { missing_fields: missing }\n    ) };\n  }\n  return { json: { ...item, __kind: 'error' } };\n}\n\nconst requiredFields = [\n  'workflow_version', 'contract_version', 'request_id', 'response_id',\n  'status_code', 'headers', 'body', 'latency_ms', 'timestamps', 'request',\n  'expected', 'test_case', 'metadata'\n];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_HTTP_RESPONSE_CONTRACT',\n    `HTTP Response Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields, request_id: item.request_id || null }\n  ) };\n}\n\nreturn { json: { ...item, __kind: 'response' } };"
+      }
+    },
+    {
+      "id": "normalize-transport-node",
+      "name": "Normalize Transport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Maps whatever transport result actually happened - a real HTTP\n// response, or a transport-level failure from the HTTP Executor - into\n// exactly one of a fixed set of categories the Decision Agent can branch\n// on without knowing which HTTP client, error code, or status range\n// produced it. No AI, no inference, no PASS/FAIL judgment - a status\n// code is categorized here, never compared against `expected`.\nconst STAGE = 'response_normalizer';\nconst WORKFLOW_VERSION = '1.0';\n\n// Every 03-http-executor error code this workflow knows how to\n// categorize. Hand-kept in sync with that workflow's own error-code\n// table (docs/contracts/error-payload.md, http_executor section) - same\n// convention as SUPPORTED_VERIFICATION_TYPES/AGENT_ROUTES in\n// 01-ingestion.json (docs/workflow-standards.md). A code with no entry\n// here is a real drift signal, not silently guessed - see\n// UNKNOWN_TRANSPORT_ERROR below.\nconst TRANSPORT_CODE_MAP = {\n  TIMEOUT_ERROR: 'TIMEOUT',\n  CONNECTION_REFUSED: 'NETWORK_ERROR',\n  DNS_RESOLUTION_FAILED: 'NETWORK_ERROR',\n  NETWORK_ERROR: 'NETWORK_ERROR',\n  INVALID_URL: 'NETWORK_ERROR',\n  MISSING_CREDENTIALS: 'AUTHENTICATION_ERROR',\n  UNSUPPORTED_AUTHENTICATION: 'AUTHENTICATION_ERROR',\n  UNSUPPORTED_HTTP_METHOD: 'UNKNOWN_ERROR',\n  INVALID_API_REQUEST_CONTRACT: 'UNKNOWN_ERROR'\n};\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\nif (!item.__kind) {\n  return { json: item };\n}\n\nif (item.__kind === 'error') {\n  const transportStatus = TRANSPORT_CODE_MAP[item.code];\n  if (!transportStatus) {\n    return { json: errorPayload(\n      'UNKNOWN_TRANSPORT_ERROR',\n      `HTTP Executor error code \"${item.code}\" has no known transport category mapping`,\n      { code: item.code, request_id: (item.details && item.details.request_id) || null }\n    ) };\n  }\n  return { json: { ...item, __transport: { status: transportStatus, status_code: null, response_time_ms: null } } };\n}\n\nconst statusCode = item.status_code;\n\nif (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599) {\n  return { json: errorPayload(\n    'INVALID_STATUS_CODE',\n    `status_code must be an integer between 100 and 599, received \"${statusCode}\"`,\n    { request_id: item.request_id, status_code: statusCode }\n  ) };\n}\n\nlet transportStatus;\nif (statusCode === 401 || statusCode === 403) transportStatus = 'AUTHENTICATION_ERROR';\nelse if (statusCode >= 200 && statusCode <= 299) transportStatus = 'SUCCESS';\nelse if (statusCode >= 400 && statusCode <= 499) transportStatus = 'CLIENT_ERROR';\nelse if (statusCode >= 500 && statusCode <= 599) transportStatus = 'SERVER_ERROR';\nelse transportStatus = 'UNKNOWN_ERROR'; // a valid status code (1xx/3xx) with no specific category\n\nreturn { json: { ...item, __transport: {\n  status: transportStatus,\n  status_code: statusCode,\n  response_time_ms: typeof item.latency_ms === 'number' ? item.latency_ms : null\n} } };"
+      }
+    },
+    {
+      "id": "normalize-headers-node",
+      "name": "Normalize Headers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Produces a stable `headers` object for the final contract - always a\n// plain object, never omitted, never exposing raw n8n/HTTP Request node\n// internals. A transport failure never received real response headers,\n// so its normalized headers are always {} (explicit, not omitted).\nconst STAGE = 'response_normalizer';\nconst WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\n\nif (!item.__kind) {\n  return { json: item };\n}\n\nif (item.__kind === 'error') {\n  return { json: { ...item, __normalized_headers: {} } };\n}\n\nif (typeof item.headers !== 'object' || item.headers === null || Array.isArray(item.headers)) {\n  return { json: {\n    status: 'ERROR',\n    stage: STAGE,\n    code: 'MALFORMED_RESPONSE',\n    message: `HTTP Response Contract headers for request_id \"${item.request_id}\" must be a JSON object`,\n    details: { request_id: item.request_id },\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  } };\n}\n\nreturn { json: { ...item, __normalized_headers: item.headers } };"
+      }
+    },
+    {
+      "id": "normalize-body-node",
+      "name": "Normalize Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Produces a stable `body` value for the final contract - whatever\n// shape the target API returned, passed through as-is (this workflow\n// never parses, reshapes, or judges body content, same non-goal as\n// 03-http-executor). A transport failure never received a body, so its\n// normalized body is always null (explicit, not omitted). The only\n// failure this node can produce is a body that can't even be carried\n// through n8n's JSON item data (e.g. a circular structure).\nconst STAGE = 'response_normalizer';\nconst WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\n\nif (!item.__kind) {\n  return { json: item };\n}\n\nif (item.__kind === 'error') {\n  return { json: { ...item, __normalized_body: null } };\n}\n\ntry {\n  JSON.stringify(item.body);\n} catch (err) {\n  return { json: {\n    status: 'ERROR',\n    stage: STAGE,\n    code: 'MALFORMED_RESPONSE',\n    message: `Response body for request_id \"${item.request_id}\" could not be normalized: ${err.message}`,\n    details: { request_id: item.request_id },\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  } };\n}\n\nreturn { json: { ...item, __normalized_body: item.body !== undefined ? item.body : null } };"
+      }
+    },
+    {
+      "id": "normalize-metadata-node",
+      "name": "Normalize Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Produces the final contract's metadata block. Kept as its own node,\n// even though the job is small, so the workflow's node graph matches\n// the one-job-per-node convention (docs/workflow-standards.md) and the\n// task's requested node chain.\nconst item = $input.item.json;\n\nif (!item.__kind) {\n  return { json: item };\n}\n\nreturn { json: { ...item, __normalized_metadata: {\n  normalized_at: new Date().toISOString(),\n  source_workflow: '03-http-executor',\n  next_workflow: '05-decision-agent'\n} } };"
+      }
+    },
+    {
+      "id": "build-normalized-response-contract-node",
+      "name": "Build Normalized Response Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Final assembly: produces the Normalized Response Contract\n// (docs/contracts/normalized-response-contract.md) from everything the\n// previous nodes computed. This is the only node that builds the final\n// output shape - earlier nodes only ever add __-prefixed working fields\n// or short-circuit with this workflow's own ERROR payload, never the\n// public contract fields themselves. Never compares transport.status_code\n// against `expected`, never sets a PASS/FAIL verdict, never calls an AI\n// model - that is the Decision Agent's job (docs/architecture/\n// milestone-1.md section 5), not this workflow's.\nconst CONTRACT_VERSION = '1.0';\nconst NORMALIZER_WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\n\nif (!item.__kind) {\n  return { json: item };\n}\n\nconst isError = item.__kind === 'error';\n\nreturn { json: {\n  workflow_version: NORMALIZER_WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: isError ? ((item.details && item.details.request_id) || null) : item.request_id,\n  response_id: isError ? null : item.response_id,\n  test_case: isError ? ((item.details && item.details.test_case) || null) : item.test_case,\n  expected: isError ? ((item.details && item.details.expected) || null) : item.expected,\n  transport: item.__transport,\n  response: {\n    headers: item.__normalized_headers,\n    body: item.__normalized_body\n  },\n  metadata: item.__normalized_metadata\n} };"
+      }
+    },
+    {
+      "id": "decision-agent-handoff",
+      "name": "Decision Agent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1420, 260],
+      "notes": "Hand-off boundary to the Decision Agent workflow (Task 4, not yet built). Receives either a Normalized Response Contract (docs/contracts/normalized-response-contract.md) or an ERROR payload (docs/contracts/error-payload.md) for input this workflow itself could not normalize. No PASS/FAIL judgment or AI reasoning happens in this workflow.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "HTTP Response Contract Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Contract": {
+      "main": [
+        [
+          {
+            "node": "Normalize Transport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Transport": {
+      "main": [
+        [
+          {
+            "node": "Normalize Headers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Headers": {
+      "main": [
+        [
+          {
+            "node": "Normalize Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Body": {
+      "main": [
+        [
+          {
+            "node": "Normalize Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Metadata": {
+      "main": [
+        [
+          {
+            "node": "Build Normalized Response Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Normalized Response Contract": {
+      "main": [
+        [
+          {
+            "node": "Decision Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
