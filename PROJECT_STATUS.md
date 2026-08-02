@@ -15,7 +15,8 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 3.2 - HTTP Executor | `03-http-executor.json` | Built (`workflow_version: "1.1"` - see Task 3.3 defect-fix note below). Node logic verified against a real target (httpbin.org) via a script harness outside n8n - see "Verification notes" below. Not yet imported/run inside a live n8n instance. |
 | Task 3.3 - Response Normalizer | `04-response-normalizer.json` | Built. Node logic verified with a script harness (197/197 checks) against synthetic HTTP Response Contracts and HTTP Executor ERROR payloads - see "Verification notes" below. Not yet imported/run inside a live n8n instance. |
 | Task 4.0 - Decision Agent foundations | `docs/contracts/decision-contract.md`, ADR 005, `prompts/decision-agent/v1.md` | Done - design layer only, no workflow. See `docs/reviews/task-4.0-decision-agent-foundations-review.md`. |
-| Task 4.1 - Decision Orchestrator | `05-decision-orchestrator.json` | Built. Tier 0/1 (deterministic) and Tier 2 (AI-assisted, response validation) logic verified with a script harness (50/50 checks) - see "Verification notes" below. AI call itself mocked (no live Anthropic credential in this environment) and not yet imported/run inside a live n8n instance. Deliberately does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery - later tasks. |
+| Task 4.1 - Decision Orchestrator | `05-decision-orchestrator.json` | Built. Tier 0/1 (deterministic) and Tier 2 (AI-assisted, response validation) logic verified with a script harness. AI call itself mocked (no live Anthropic credential in this environment) and not yet imported/run inside a live n8n instance. Deliberately does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery - later tasks. |
+| Task 4.2 - Decision Engine (extracted Tier 0/1) | `05-decision-orchestrator.json` (same file, refactored) | Done. Tier 0 + Tier 1 + final contract assembly consolidated into a named "Decision Engine" node group, using structured evidence objects internally (rendered to strings only at final assembly - `decision-contract.md`'s shape is unchanged). Script harness: 60/60 checks, no regression to Tier 2. See "Verification notes" below. |
 | Documentation Agent | `06-documentation-agent.json` | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
@@ -69,7 +70,18 @@ output still produced), and that an upstream ERROR payload is routed
 straight through without ever entering the tier engine or calling AI.
 **The AI call itself is mocked** - no live Anthropic credential was
 available in this environment, so the actual network call to Claude, and
-therefore real-world prompt quality/calibration, is unverified. See
+therefore real-world prompt quality/calibration, is unverified.
+
+**Task 4.2 (Decision Engine extraction):** Tier 0, Tier 1, and final
+Decision Contract assembly (previously three loosely-related nodes) were
+consolidated into a named "Decision Engine" node group with a dedicated
+sticky note, and evidence is now built as structured objects internally
+(e.g. `{ type: 'status_code', expected: 200, actual: 200 }`), rendered
+to the array-of-strings shape `decision-contract.md` requires only at
+final assembly - the contract itself is unchanged. Re-ran the Task 4.1
+harness plus 10 new checks (evidence structure/rendering, full
+traceability): 60/60 passed, including that the Tier 2/AI path is
+byte-for-byte unaffected. See
 `docs/reviews/task-4.0-decision-agent-foundations-review.md` for the
 known gaps this doesn't close (confidence thresholds are uncalibrated
 placeholders; the few-shot examples are untested against a real model).

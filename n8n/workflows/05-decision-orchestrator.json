@@ -10,7 +10,7 @@
       "parameters": {
         "width": 480,
         "height": 400,
-        "content": "## Milestone 1 - Task 4.1: Decision Orchestrator\n\nConsumes the Normalized Response Contract produced by 04-response-normalizer (docs/contracts/normalized-response-contract.md) and produces a Decision Contract (docs/contracts/decision-contract.md) via a three-tier funnel (docs/architecture/decision-agent-design.md section 1):\n\n- Tier 0: transport.status_code === null -> BLOCKED, no AI.\n- Tier 1: expected.status exists and exactly equals the actual status code -> PASS, no AI.\n- Tier 2: everything else -> build an evidence packet, call Claude once, validate its structured response.\n\nThis workflow decides WHEN AI is needed and validates what comes back - it does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery (those are later tasks). It never implements Documentation Agent or Jira Agent."
+        "content": "## Milestone 1 - Task 4.1/4.2: Decision Orchestrator\n\nConsumes the Normalized Response Contract produced by 04-response-normalizer (docs/contracts/normalized-response-contract.md) and produces a Decision Contract (docs/contracts/decision-contract.md) via a three-tier funnel (docs/architecture/decision-agent-design.md section 1):\n\n- Tier 0: transport.status_code === null -> BLOCKED, no AI.\n- Tier 1: expected.status exists and exactly equals the actual status code -> PASS, no AI.\n- Tier 2: everything else -> build an evidence packet, call Claude once, validate its structured response.\n\nTask 4.2 extracted Tier 0 + Tier 1 + final contract assembly into the 'Decision Engine' node group (see that sticky) - a dedicated, reusable component that generates a complete Decision Contract for every case that doesn't need AI, using structured evidence internally. Tier routing, the AI call, and the Decision Contract's shape are all unchanged from Task 4.1.\n\nThis workflow still does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery (later tasks), and never implements Documentation Agent or Jira Agent."
       }
     },
     {
@@ -34,7 +34,19 @@
       "parameters": {
         "width": 460,
         "height": 400,
-        "content": "## Task 4.1 design notes\n\n- 'Route Validation Errors' mirrors the same-named pattern in 03-http-executor.json: an item that's already an ERROR payload (upstream, or from 'Validate Contract') skips the tier engine and AI entirely.\n- Tier 0 and Tier 1 each check '__verdict' from the previous tier before doing their own check, so at most one tier ever resolves a given item.\n- The 0.7 confidence threshold gating PASS/FAIL vs MANUAL_REVIEW in 'Validate Decision Contract' is docs/contracts/decision-contract.md's own already-published Verdict States rule, enforced here as contract validation - the confidence VALUE itself is never adjusted (that's confidence recalibration, explicitly out of scope for this task).\n- AI_SERVICE_UNAVAILABLE (Claude node's error output) is deliberately a single generic code, not a classifier like 03's - anything more is 'AI failure recovery', out of scope here."
+        "content": "## Task 4.1 design notes\n\n- 'Route Validation Errors' mirrors the same-named pattern in 03-http-executor.json: an item that's already an ERROR payload (upstream, or from 'Validate Contract') skips the Decision Engine and AI entirely.\n- Decision Engine Tier 0 and Tier 1 each check '__verdict' from the previous tier before doing their own check, so at most one tier ever resolves a given item.\n- The 0.7 confidence threshold gating PASS/FAIL vs MANUAL_REVIEW in 'Validate Decision Contract' is docs/contracts/decision-contract.md's own already-published Verdict States rule, enforced here as contract validation - the confidence VALUE itself is never adjusted (that's confidence recalibration, explicitly out of scope for this task).\n- AI_SERVICE_UNAVAILABLE (Claude node's error output) is deliberately a single generic code, not a classifier like 03's - anything more is 'AI failure recovery', out of scope here."
+      }
+    },
+    {
+      "id": "sticky-decision-engine-note",
+      "name": "Decision Engine Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [480, 560],
+      "parameters": {
+        "width": 760,
+        "height": 240,
+        "content": "## Decision Engine (Task 4.2)\n\nThe three nodes below - 'Decision Engine - Tier 0 (Transport)', 'Decision Engine - Tier 1 (Exact Match)', 'Decision Engine - Finalize' - are the dedicated, reusable component that generates a complete Decision Contract for every case that doesn't need AI. AI invocation stays isolated to Tier 2 (right side of this workflow) - nothing in this group ever calls Claude.\n\nEvidence is built as structured objects internally (e.g. `{ type: 'status_code', expected: 200, actual: 200 }`) and only rendered to the array-of-strings shape docs/contracts/decision-contract.md requires in 'Decision Engine - Finalize' - the contract itself is unchanged, only this group's internal representation is (Task 4.2).\n\nKept as an in-workflow node group rather than extracted to a separate sub-workflow file: this project has never yet exercised a real n8n cross-workflow Execute Workflow call (every 'hand-off' NoOp so far is conceptual, not wired), and introducing that unverified mechanism here would add risk beyond this task's scope. The group's minimal external coupling (works only off __-prefixed fields it owns) makes it a low-effort lift into a sub-workflow later, once live n8n verification is possible."
       }
     },
     {
@@ -90,26 +102,26 @@
     },
     {
       "id": "run-tier-0-node",
-      "name": "Run Tier 0",
+      "name": "Decision Engine - Tier 0 (Transport)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [520, 340],
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Tier 0 - deterministic transport short-circuit (docs/architecture/\n// decision-agent-design.md section 1; docs/contracts/decision-contract.md\n// \"Verdict states\"). transport.status_code === null is a guarantee\n// normalized-response-contract.md already makes for a real transport\n// failure - there is no real response to reason about, so no AI call\n// happens here or is ever appropriate for this case.\nconst item = $input.item.json;\n\nif (item.transport && item.transport.status_code === null) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'BLOCKED',\n      confidence: 1.0,\n      reasoning: `No response was received: transport.status = ${item.transport.status}.`,\n      evidence: [`transport.status: ${item.transport.status}`],\n      next_action: 'none'\n    },\n    __tier: 'deterministic_transport'\n  } };\n}\n\nreturn { json: item };"
+        "jsCode": "// Decision Engine - Tier 0 (transport short-circuit). Part of the\n// reusable deterministic Decision Engine node group (see the Decision\n// Engine Note sticky) - docs/architecture/decision-agent-design.md\n// section 1; docs/contracts/decision-contract.md \"Verdict states\".\n// transport.status_code === null is a guarantee normalized-response-\n// contract.md already makes for a real transport failure - there is no\n// real response to reason about, so no AI call happens here or is ever\n// appropriate for this case.\n//\n// Evidence is built as a structured object (Task 4.2), not a hand-\n// written string - only 'Decision Engine - Finalize' renders it to the\n// string(s) docs/contracts/decision-contract.md's evidence field\n// requires. This node's own output shape is otherwise unchanged from\n// Task 4.1.\nconst item = $input.item.json;\n\nif (item.transport && item.transport.status_code === null) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'BLOCKED',\n      confidence: 1.0,\n      reasoning: `No response was received: transport.status = ${item.transport.status}.`,\n      evidence: [\n        { type: 'transport_status', field: 'transport.status', value: item.transport.status }\n      ],\n      next_action: 'none'\n    },\n    __tier: 'deterministic_transport'\n  } };\n}\n\nreturn { json: item };"
       }
     },
     {
       "id": "run-tier-1-node",
-      "name": "Run Tier 1",
+      "name": "Decision Engine - Tier 1 (Exact Match)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [740, 340],
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Tier 1 - deterministic exact-match fast path (same references as\n// Tier 0). Only evaluated if Tier 0 didn't already resolve the item.\n// expected.status matching transport.status_code exactly is arithmetic,\n// not judgment - no AI call happens here or is ever appropriate for\n// this case. Anything that reaches here unresolved needs Tier 2\n// (__needs_ai: true), which the next node (an IF) branches on.\nconst item = $input.item.json;\n\nif (item.__verdict) {\n  return { json: { ...item, __needs_ai: false } };\n}\n\nconst expectedStatus = item.expected && typeof item.expected.status === 'number' ? item.expected.status : null;\nconst actualStatus = item.transport ? item.transport.status_code : null;\n\nif (expectedStatus !== null && actualStatus !== null && expectedStatus === actualStatus) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'PASS',\n      confidence: 1.0,\n      reasoning: `Expected status ${expectedStatus}, received ${actualStatus}. Deterministic status-code match, no AI reasoning required.`,\n      evidence: [`expected_status: ${expectedStatus}`, `actual_status: ${actualStatus}`],\n      next_action: 'write_report'\n    },\n    __tier: 'deterministic_exact_match',\n    __needs_ai: false\n  } };\n}\n\nreturn { json: { ...item, __needs_ai: true } };"
+        "jsCode": "// Decision Engine - Tier 1 (exact-match fast path). Part of the\n// reusable deterministic Decision Engine node group - see Tier 0's\n// comment and the Decision Engine Note sticky. Only evaluated if Tier 0\n// didn't already resolve the item. expected.status matching\n// transport.status_code exactly is arithmetic, not judgment - no AI\n// call happens here or is ever appropriate for this case. Anything\n// that reaches here unresolved needs Tier 2 (__needs_ai: true), which\n// 'Need AI?' branches on - unchanged from Task 4.1 (tier routing itself\n// is out of scope for this task).\n//\n// Evidence is built as a structured object (Task 4.2) - see Tier 0's\n// comment for why.\nconst item = $input.item.json;\n\nif (item.__verdict) {\n  return { json: { ...item, __needs_ai: false } };\n}\n\nconst expectedStatus = item.expected && typeof item.expected.status === 'number' ? item.expected.status : null;\nconst actualStatus = item.transport ? item.transport.status_code : null;\n\nif (expectedStatus !== null && actualStatus !== null && expectedStatus === actualStatus) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'PASS',\n      confidence: 1.0,\n      reasoning: `Expected HTTP ${expectedStatus} and received HTTP ${actualStatus}. Deterministic status-code match - no AI evaluation was needed.`,\n      evidence: [\n        { type: 'status_code', expected: expectedStatus, actual: actualStatus }\n      ],\n      next_action: 'write_report'\n    },\n    __tier: 'deterministic_exact_match',\n    __needs_ai: false\n  } };\n}\n\nreturn { json: { ...item, __needs_ai: true } };"
       }
     },
     {
@@ -144,14 +156,14 @@
     },
     {
       "id": "assemble-decision-contract-node",
-      "name": "Assemble Decision Contract",
+      "name": "Decision Engine - Finalize",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [1180, 260],
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Final assembly for a Tier 0/Tier 1 (deterministic, no-AI) verdict -\n// wraps __verdict/__tier computed by the tier engine into the full\n// Decision Contract shape (docs/contracts/decision-contract.md). This is\n// the only node on this branch that builds the public contract fields -\n// earlier nodes only ever add __-prefixed working fields.\nconst CONTRACT_VERSION = '1.0';\nconst ORCHESTRATOR_WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\nconst decidedAt = new Date().toISOString();\n\nreturn { json: {\n  workflow_version: ORCHESTRATOR_WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: item.request_id,\n  response_id: item.response_id,\n  test_case: item.test_case,\n  verdict: item.__verdict,\n  decision_basis: {\n    tier: item.__tier,\n    model_version: null,\n    prompt_version: null\n  },\n  metadata: {\n    decided_at: decidedAt,\n    source_workflow: '04-response-normalizer',\n    next_workflow: '06-documentation-agent'\n  }\n} };"
+        "jsCode": "// Decision Engine - Finalize. Part of the reusable deterministic\n// Decision Engine node group - see the Decision Engine Note sticky.\n// Final assembly for a Tier 0/Tier 1 (deterministic, no-AI) verdict:\n// renders the structured evidence objects Tier 0/Tier 1 built into the\n// array-of-strings shape docs/contracts/decision-contract.md's evidence\n// field requires (the contract itself is unchanged by Task 4.2 - only\n// this group's internal evidence representation is), then wraps\n// __verdict/__tier into the full Decision Contract shape. This is the\n// only node in the Decision Engine that builds the public contract\n// fields - Tier 0/Tier 1 only ever add __-prefixed working fields.\nconst CONTRACT_VERSION = '1.0';\nconst ORCHESTRATOR_WORKFLOW_VERSION = '1.0';\n\nfunction renderEvidence(entry) {\n  if (entry.type === 'transport_status') {\n    return `${entry.field}: ${entry.value}`;\n  }\n  if (entry.type === 'status_code') {\n    return `status_code: expected ${entry.expected}, actual ${entry.actual}`;\n  }\n  // Defensive fallback for an evidence type this renderer doesn't know\n  // about yet - never drop an evidence entry, just render it plainly.\n  return JSON.stringify(entry);\n}\n\nconst item = $input.item.json;\nconst decidedAt = new Date().toISOString();\n\nreturn { json: {\n  workflow_version: ORCHESTRATOR_WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: item.request_id,\n  response_id: item.response_id,\n  test_case: item.test_case,\n  verdict: {\n    ...item.__verdict,\n    evidence: item.__verdict.evidence.map(renderEvidence)\n  },\n  decision_basis: {\n    tier: item.__tier,\n    model_version: null,\n    prompt_version: null\n  },\n  metadata: {\n    decided_at: decidedAt,\n    source_workflow: '04-response-normalizer',\n    next_workflow: '06-documentation-agent'\n  }\n} };"
       }
     },
     {
@@ -262,18 +274,18 @@
           { "node": "Documentation Agent", "type": "main", "index": 0 }
         ],
         [
-          { "node": "Run Tier 0", "type": "main", "index": 0 }
+          { "node": "Decision Engine - Tier 0 (Transport)", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Run Tier 0": {
+    "Decision Engine - Tier 0 (Transport)": {
       "main": [
         [
-          { "node": "Run Tier 1", "type": "main", "index": 0 }
+          { "node": "Decision Engine - Tier 1 (Exact Match)", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Run Tier 1": {
+    "Decision Engine - Tier 1 (Exact Match)": {
       "main": [
         [
           { "node": "Need AI?", "type": "main", "index": 0 }
@@ -286,11 +298,11 @@
           { "node": "Build Evidence Packet", "type": "main", "index": 0 }
         ],
         [
-          { "node": "Assemble Decision Contract", "type": "main", "index": 0 }
+          { "node": "Decision Engine - Finalize", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Assemble Decision Contract": {
+    "Decision Engine - Finalize": {
       "main": [
         [
           { "node": "Documentation Agent", "type": "main", "index": 0 }
