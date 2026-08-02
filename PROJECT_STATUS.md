@@ -17,6 +17,7 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.0 - Decision Agent foundations | `docs/contracts/decision-contract.md`, ADR 005, `prompts/decision-agent/v1.md` | Done - design layer only, no workflow. See `docs/reviews/task-4.0-decision-agent-foundations-review.md`. |
 | Task 4.1 - Decision Orchestrator | `05-decision-orchestrator.json` | Built. Tier 0/1 (deterministic) and Tier 2 (AI-assisted, response validation) logic verified with a script harness. AI call itself mocked (no live Anthropic credential in this environment) and not yet imported/run inside a live n8n instance. Deliberately does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery - later tasks. |
 | Task 4.2 - Decision Engine (extracted Tier 0/1) | `05-decision-orchestrator.json` (same file, refactored) | Done. Tier 0 + Tier 1 + final contract assembly consolidated into a named "Decision Engine" node group, using structured evidence objects internally (rendered to strings only at final assembly - `decision-contract.md`'s shape is unchanged). Script harness: 60/60 checks, no regression to Tier 2. See "Verification notes" below. |
+| Task 4.3 - AI Evaluation (Prompt Builder) | `05-decision-orchestrator.json` (same file, extended) | Done. Split the former "Build AI Request" node into a dedicated "Prompt Builder" stage (evidence allow-list re-verification + prompt content) and "Build Claude API Request" (API-call structure only). Script harness: 68/68 checks, no regression to Tier 0/1/2. See "Verification notes" below. |
 | Documentation Agent | `06-documentation-agent.json` | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
@@ -86,15 +87,27 @@ byte-for-byte unaffected. See
 known gaps this doesn't close (confidence thresholds are uncalibrated
 placeholders; the few-shot examples are untested against a real model).
 
+**Task 4.3 (AI Evaluation - Prompt Builder):** Split the former "Build AI
+Request" node (which conflated prompt content with API-call structure)
+into "Prompt Builder" (re-verifies the evidence packet against the
+allow-list - defense in depth on top of "Build Evidence Packet"'s own
+construction - and builds the system prompt + user message) and "Build
+Claude API Request" (owns only model/tool/API-call structure). Re-ran the
+full harness plus 8 new checks, including a defense-in-depth test that
+feeds Prompt Builder a deliberately leaked `request_id`/`jira_key` and
+confirms both are stripped before reaching the model: 68/68 passed, zero
+regression to Tier 0/1/2. Same "AI call is mocked, never run against a
+real Anthropic API" caveat as Task 4.1 still applies.
+
 ## Next up
 
-Per the Task 4 tree: 4.2 (Deterministic Tier Engine), 4.3 (AI Evaluation
-Node), 4.4 (Confidence & Hallucination Guards), 4.5 (Decision Contract
-Validation) - largely refinements/hardening of what 4.1 already built
-end-to-end (tier routing, the AI call, and basic schema validation all
-exist now; later tasks add grounding checks, retry logic, AI-failure
-recovery, and confidence recalibration on top, per their own scope).
-Before any of them: import `05-decision-orchestrator.json` into a real
-n8n instance with a real Anthropic credential and run at least one Tier
-2 case end-to-end - nothing about the actual AI call has been verified
+Per the Task 4 tree: 4.4 (Confidence & Hallucination Guards), 4.5
+(Decision Contract Validation) - both refinements/hardening of what 4.1-
+4.3 already built end-to-end (tier routing, the AI call with a dedicated
+prompt stage, and basic schema validation all exist now; 4.4/4.5 add
+grounding checks, retry logic, AI-failure recovery, and confidence
+recalibration on top, per their own scope). Before any of them: import
+`05-decision-orchestrator.json` into a real n8n instance with a real
+Anthropic credential and run at least one Tier 2 case end-to-end -
+nothing about the actual AI call has been verified
 outside this environment's mocked harness.
