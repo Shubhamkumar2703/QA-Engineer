@@ -212,3 +212,31 @@ transport failure, normalizer-level error), not just the happy path.
   track the task's own literal example more closely. This is a content
   change, not a shape change - `decision-contract.md` doesn't pin exact
   wording, only field types.
+
+## Task 4.3 (AI Evaluation - Prompt Builder) - things worth knowing
+
+- "Build AI Request" (Task 4.1) conflated two different concerns: the
+  prompt content (system prompt text, user message from the evidence
+  packet) and the Anthropic API-call structure (model, temperature,
+  tool schema, tool_choice). Split into "Prompt Builder" (owns prompt
+  content + evidence-allow-list re-verification) and "Build Claude API
+  Request" (owns API-call structure only, consumes `item.__prompt`).
+  Rationale: a future model swap (e.g. escalating to a stronger model
+  per `decision-agent-design.md` section 8's cascade idea) should never
+  risk touching prompt/evidence-filtering logic, and vice versa.
+- "Prompt Builder" re-filters `__evidence_packet` down to the exact 7
+  allow-listed keys even though "Build Evidence Packet" already
+  constructs only those keys - genuine defense in depth, not redundant
+  busywork. Verified with a test that deliberately leaks `request_id`/
+  `jira_key` into the packet and confirms Prompt Builder still strips
+  them before they'd reach the model.
+- `__model_version` is set by "Build Claude API Request" (API-call
+  concern); `__prompt_version` is set by "Prompt Builder" (prompt
+  concern) and threaded through unchanged. Both still land in
+  `decision_basis` at "Validate Decision Contract", which now reads
+  `$('Build Claude API Request')` instead of the old `$('Build AI
+  Request')` name - if a future search for "Build AI Request" turns up
+  nothing, that's why.
+- Same verification approach and same caveat as every prior task in this
+  chain: script harness only (68/68 checks, up from 60), Claude call
+  mocked - never run against a real Anthropic API or inside real n8n.
