@@ -41,6 +41,18 @@ File: [`api-request-contract.md`](./api-request-contract.md)
 | Purpose | Describes a fully-prepared HTTP request (method, URL, headers, query, body, auth strategy, timeout, expected result) derived from a Planner Contract's `test_case` - without sending it. Separates request *preparation* from request *execution*. |
 | Backward compatibility | Same additive-only rule as the Planner Contract, tracked via two separate version fields: `workflow_version` for the producing workflow's internal changes, `contract_version` for the payload shape itself. Never embeds a real credential, so credential rotation or a new auth provider never requires a contract change - see `authentication` in that document. |
 
+### HTTP Response Contract
+
+File: [`http-response-contract.md`](./http-response-contract.md)
+
+| | |
+|---|---|
+| Producer | `n8n/workflows/03-http-executor.json` |
+| Consumer | The future Response Normalizer workflow (Task 3.3, not yet built) |
+| Current version | `workflow_version: "1.0"`, `contract_version: "1.0"` |
+| Purpose | Describes what actually happened when an API Request Contract was executed - status code, headers, body, latency, timestamps - without judging PASS/FAIL. Separates request *execution* (Task 3.2, this document) from *normalization* (Task 3.3) and *judgment* (Decision Agent). |
+| Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `contract_version`. Carries `expected` and `test_case` forward unchanged from the API Request Contract so the Decision Agent doesn't need to join across contracts. |
+
 ### Error Payload
 
 File: [`error-payload.md`](./error-payload.md)
