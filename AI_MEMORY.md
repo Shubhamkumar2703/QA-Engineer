@@ -110,3 +110,133 @@ transport failure, normalizer-level error), not just the happy path.
   committed workflow JSON and chained it exactly as n8n would connect the
   nodes, against synthetic inputs (not a from-scratch reimplementation).
   197/197 checks passed. Never run inside real n8n - same caveat as 3.2.
+
+## Task 4.0 (Decision Agent foundations) - things worth knowing
+
+- ADR 005 replaced the documented `NOT_RUN` verdict state with
+  `MANUAL_REVIEW` and dropped `next_action: "update_jira"` in favor of
+  `flag_for_review` - `milestone-1.md` section 5 was amended to match.
+  If anything still references `NOT_RUN`/`update_jira`, it's stale.
+- `docs/architecture/decision-agent-design.md` is the full reasoning
+  design (tier funnel, evidence rules, confidence calculation,
+  hallucination guards, cost strategy). `docs/contracts/decision-contract.md`
+  only specifies the shape that design produces - read both, the
+  contract alone doesn't explain *why*.
+- `docs/reviews/task-4.0-decision-agent-foundations-review.md` flagged
+  four real gaps before implementation: the 0.7/0.8 confidence
+  thresholds are uncalibrated placeholders; the evidence-grounding check
+  has a concept but no algorithm; AI-service-failure handling was
+  undesigned; the few-shot examples were untested against a real model.
+  Task 4.1 resolved the AI-service-failure gap (see below); the other
+  three are still open, deliberately out of scope for 4.1.
+
+## Task 4.1 (Decision Orchestrator) - things worth knowing
+
+- The workflow file is named `05-decision-orchestrator.json`, not
+  `05-decision-agent.json` as earlier docs (`decision-contract.md`'s
+  original Producer field, `workflow-standards.md`'s numbering table)
+  had assumed before this task existed - both were updated to match.
+  "Decision Agent" is still the correct conceptual role name used
+  elsewhere in the docs; this file is that role's Task 4.1
+  implementation, not a different concept. If a future doc still says
+  `05-decision-agent.json`, it's stale.
+- Resolved the AI-service-failure gap the Task 4.0 review flagged as
+  undesigned: a failed AI call (network error, timeout, non-2xx from
+  Anthropic) produces a single generic `AI_SERVICE_UNAVAILABLE` ERROR
+  payload - deliberately not a classifier like 03's `codeFor()`, since
+  anything more elaborate (retry, fallback, escalation) is AI failure
+  recovery, out of scope for this task. This is a real design decision,
+  not a placeholder - revisit only if a future task actually needs
+  retry/escalation behavior.
+- The confidence-threshold gate (PASS/FAIL below 0.7 confidence becomes
+  MANUAL_REVIEW) is enforced in `Validate Decision Contract`, reading
+  `decision-contract.md`'s own already-published Verdict States table -
+  this is contract enforcement, not confidence recalibration. The
+  model's reported confidence value is never adjusted, only which final
+  `verdict.status` gets written out is gated by it. Don't confuse this
+  with Task 4.4's evidence-based confidence *capping* (design doc
+  section 3) - that adjusts the number itself and hasn't been built yet.
+- The AI call uses Anthropic's Messages API directly via
+  `n8n-nodes-base.httpRequest` (not a LangChain/AI-specific n8n node) -
+  same reasoning as 03's HTTP Executor: a plain HTTP call to a
+  well-documented, stable REST API is lower-risk than depending on an
+  AI-node parameter schema that changes across n8n versions and
+  couldn't be verified without a live instance anyway. `tool_choice`
+  forces the model to call a `return_verdict` tool with a fixed JSON
+  Schema - it cannot return free-form text, which is both the
+  structured-output mechanism and a real (if partial) prompt-injection
+  mitigation against a hostile response body in the evidence packet.
+- The API key is supplied via an n8n Header Auth credential referenced
+  by the `Claude` node (`credentials.httpHeaderAuth`), never via `$env`
+  or embedded in the workflow JSON - see `n8n/credentials.example.json`.
+  This deliberately avoids the exact anti-pattern the Task 3.2 review
+  flagged (a real credential ending up in item data / execution logs).
+- **The AI call itself was never exercised against the real Anthropic
+  API** - no credential was available in this environment. Verified
+  everything else (tier routing, evidence packet construction/exclusion
+  rules, request building, response schema validation, the confidence
+  gate, error handling) with a script harness that mocks the HTTP call's
+  response shape - 50/50 checks passed at the time. Before trusting this
+  in a real run: import into live n8n with a real credential and check
+  at least one real Tier 2 call actually returns a `tool_use` block
+  matching the assumed shape - that assumption is unverified.
+
+## Task 4.2 (Decision Engine extraction) - things worth knowing
+
+- The task's evidence example (`{ type: "status_code", expected: 200,
+  actual: 200 }`) is an array of *objects*, but `decision-contract.md`
+  (which this task explicitly must not modify) documents `evidence` as
+  an array of *strings*. Resolved by keeping evidence as structured
+  objects only *inside* the Decision Engine (Tier 0/Tier 1 build them),
+  and rendering each to a descriptive string only in
+  `Decision Engine - Finalize`, right before the public contract fields
+  are written - the wire shape never changes, but the reusable
+  component's internals genuinely are structured now. If a future task
+  needs the Decision Contract's `evidence` field to actually carry
+  objects, that's a real `contract_version` bump, not a quiet drift -
+  don't let the renderer's presence become an excuse to skip that.
+- Tier 0/Tier 1/the final-assembly node were renamed to
+  `Decision Engine - Tier 0 (Transport)` / `Decision Engine - Tier 1
+  (Exact Match)` / `Decision Engine - Finalize` and given a dedicated
+  sticky note, but kept as an in-workflow node group rather than
+  extracted to a separate sub-workflow file. Every workflow in this
+  project so far "hands off" via a conceptual terminal NoOp, not a real
+  n8n Execute Workflow call - introducing that untested mechanism here
+  would have added risk beyond this task's scope. If a future task does
+  extract this into a real sub-workflow, the group's minimal external
+  coupling (everything it needs comes in via item fields the earlier
+  nodes already set) should make that a low-effort lift.
+- Reasoning/evidence-rendering wording changed slightly from Task 4.1
+  (e.g. Tier 1's reasoning now reads "Expected HTTP 200 and received
+  HTTP 200..." rather than "Expected status 200, received 200...") to
+  track the task's own literal example more closely. This is a content
+  change, not a shape change - `decision-contract.md` doesn't pin exact
+  wording, only field types.
+
+## Task 4.3 (AI Evaluation - Prompt Builder) - things worth knowing
+
+- "Build AI Request" (Task 4.1) conflated two different concerns: the
+  prompt content (system prompt text, user message from the evidence
+  packet) and the Anthropic API-call structure (model, temperature,
+  tool schema, tool_choice). Split into "Prompt Builder" (owns prompt
+  content + evidence-allow-list re-verification) and "Build Claude API
+  Request" (owns API-call structure only, consumes `item.__prompt`).
+  Rationale: a future model swap (e.g. escalating to a stronger model
+  per `decision-agent-design.md` section 8's cascade idea) should never
+  risk touching prompt/evidence-filtering logic, and vice versa.
+- "Prompt Builder" re-filters `__evidence_packet` down to the exact 7
+  allow-listed keys even though "Build Evidence Packet" already
+  constructs only those keys - genuine defense in depth, not redundant
+  busywork. Verified with a test that deliberately leaks `request_id`/
+  `jira_key` into the packet and confirms Prompt Builder still strips
+  them before they'd reach the model.
+- `__model_version` is set by "Build Claude API Request" (API-call
+  concern); `__prompt_version` is set by "Prompt Builder" (prompt
+  concern) and threaded through unchanged. Both still land in
+  `decision_basis` at "Validate Decision Contract", which now reads
+  `$('Build Claude API Request')` instead of the old `$('Build AI
+  Request')` name - if a future search for "Build AI Request" turns up
+  nothing, that's why.
+- Same verification approach and same caveat as every prior task in this
+  chain: script harness only (68/68 checks, up from 60), Claude call
+  mocked - never run against a real Anthropic API or inside real n8n.

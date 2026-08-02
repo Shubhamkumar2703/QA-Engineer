@@ -1,0 +1,387 @@
+{
+  "name": "05 - Decision Orchestrator",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -320],
+      "parameters": {
+        "width": 480,
+        "height": 400,
+        "content": "## Milestone 1 - Task 4.1/4.2/4.3: Decision Orchestrator\n\nConsumes the Normalized Response Contract produced by 04-response-normalizer (docs/contracts/normalized-response-contract.md) and produces a Decision Contract (docs/contracts/decision-contract.md) via a three-tier funnel (docs/architecture/decision-agent-design.md section 1):\n\n- Tier 0: transport.status_code === null -> BLOCKED, no AI.\n- Tier 1: expected.status exists and exactly equals the actual status code -> PASS, no AI.\n- Tier 2: everything else -> build an evidence packet, call Claude once, validate its structured response.\n\nTask 4.2 extracted Tier 0 + Tier 1 + final contract assembly into the 'Decision Engine' node group (see that sticky). Task 4.3 extracted the AI path's prompt construction into a dedicated 'Prompt Builder' stage, separate from the Anthropic API-call assembly (see the AI Evaluation Note sticky). Tier routing and the Decision Contract's shape are unchanged since Task 4.1.\n\nThis workflow still does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery (later tasks), and never implements Documentation Agent or Jira Agent."
+      }
+    },
+    {
+      "id": "sticky-security-note",
+      "name": "Security Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, -320],
+      "parameters": {
+        "width": 460,
+        "height": 400,
+        "content": "## Security notes\n\n- The Claude node's URL is a fixed literal (https://api.anthropic.com/v1/messages), never built from item data - no SSRF surface here (unlike the HTTP Executor, which sends to a test-provided URL by design).\n- The API key is never read from item data or $env in this workflow - it's supplied via an n8n Header Auth credential (see 'Claude' node), so it never appears in workflow JSON or execution data. See n8n/credentials.example.json.\n- response_body in the evidence packet is capped (Build Evidence Packet) so an oversized or adversarial target-API response can't blow up AI cost or request size.\n- tool_choice forces the model to call return_verdict with a fixed JSON Schema - it cannot return free-form text, which bounds a prompt-injection attempt from an adversarial response body to 'pick a wrong enum/string within this schema', not arbitrary output or tool access. This narrows, but does not eliminate, injection risk - full grounding/hallucination defenses are Task 4.4, not this workflow."
+      }
+    },
+    {
+      "id": "sticky-contract-note",
+      "name": "Contract Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1780, -320],
+      "parameters": {
+        "width": 460,
+        "height": 400,
+        "content": "## Task 4.1 design notes\n\n- 'Route Validation Errors' mirrors the same-named pattern in 03-http-executor.json: an item that's already an ERROR payload (upstream, or from 'Validate Contract') skips the Decision Engine and AI entirely.\n- Decision Engine Tier 0 and Tier 1 each check '__verdict' from the previous tier before doing their own check, so at most one tier ever resolves a given item.\n- The 0.7 confidence threshold gating PASS/FAIL vs MANUAL_REVIEW in 'Validate Decision Contract' is docs/contracts/decision-contract.md's own already-published Verdict States rule, enforced here as contract validation - the confidence VALUE itself is never adjusted (that's confidence recalibration, explicitly out of scope for this task).\n- AI_SERVICE_UNAVAILABLE (Claude node's error output) is deliberately a single generic code, not a classifier like 03's - anything more is 'AI failure recovery', out of scope here."
+      }
+    },
+    {
+      "id": "sticky-decision-engine-note",
+      "name": "Decision Engine Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [480, 560],
+      "parameters": {
+        "width": 760,
+        "height": 240,
+        "content": "## Decision Engine (Task 4.2)\n\nThe three nodes below - 'Decision Engine - Tier 0 (Transport)', 'Decision Engine - Tier 1 (Exact Match)', 'Decision Engine - Finalize' - are the dedicated, reusable component that generates a complete Decision Contract for every case that doesn't need AI. AI invocation stays isolated to Tier 2 (right side of this workflow) - nothing in this group ever calls Claude.\n\nEvidence is built as structured objects internally (e.g. `{ type: 'status_code', expected: 200, actual: 200 }`) and only rendered to the array-of-strings shape docs/contracts/decision-contract.md requires in 'Decision Engine - Finalize' - the contract itself is unchanged, only this group's internal representation is (Task 4.2).\n\nKept as an in-workflow node group rather than extracted to a separate sub-workflow file: this project has never yet exercised a real n8n cross-workflow Execute Workflow call (every 'hand-off' NoOp so far is conceptual, not wired), and introducing that unverified mechanism here would add risk beyond this task's scope. The group's minimal external coupling (works only off __-prefixed fields it owns) makes it a low-effort lift into a sub-workflow later, once live n8n verification is possible."
+      }
+    },
+    {
+      "id": "sticky-ai-evaluation-note",
+      "name": "AI Evaluation Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1180, 620],
+      "parameters": {
+        "width": 940,
+        "height": 260,
+        "content": "## AI Evaluation (Task 4.3)\n\nThe Tier 2 component: 'Build Evidence Packet' -> 'Prompt Builder' -> 'Build Claude API Request' -> 'Claude' -> 'Validate Decision Contract' (or 'Build AI Service Error' on failure). Only reached when the Decision Engine (left) couldn't resolve a case without AI.\n\n'Prompt Builder' is the dedicated stage this task adds: it re-verifies the evidence packet against the allow-listed keys (defense in depth on top of 'Build Evidence Packet''s own construction) and builds the system prompt + user message text - separately from 'Build Claude API Request', which owns only the Anthropic API-call structure (model, tool schema, tool_choice). Splitting these two means a future model swap or parameter change never risks touching the prompt/evidence-allow-list logic, and vice versa.\n\n'Validate Decision Contract' is unchanged from Task 4.1/4.2 - still no retry, no grounding validation, no confidence recalibration (later tasks)."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "Normalized Response Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 260],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-contract-node",
+      "name": "Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Confirms the incoming item is a well-formed Normalized Response\n// Contract (docs/contracts/normalized-response-contract.md) before any\n// tier logic runs. This is the only node that validates the contract's\n// envelope shape - later nodes trust it.\nconst STAGE = 'decision_agent';\nconst WORKFLOW_VERSION = '1.0';\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\n// ERROR payloads produced upstream (Response Normalizer) are not\n// Normalized Response Contracts and must not be re-validated as one -\n// pass them through unchanged, same convention as every prior workflow.\nif (item && item.status === 'ERROR') {\n  return { json: item };\n}\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_NORMALIZED_RESPONSE_CONTRACT',\n    'Normalized Response Contract must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nconst requiredFields = [\n  'workflow_version', 'contract_version', 'request_id', 'response_id',\n  'test_case', 'expected', 'transport', 'response', 'metadata'\n];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_NORMALIZED_RESPONSE_CONTRACT',\n    `Normalized Response Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields, request_id: item.request_id || null }\n  ) };\n}\n\nif (typeof item.transport !== 'object' || item.transport === null || Array.isArray(item.transport) ||\n    !('status' in item.transport) || !('status_code' in item.transport) || !('response_time_ms' in item.transport)) {\n  return { json: errorPayload(\n    'INVALID_NORMALIZED_RESPONSE_CONTRACT',\n    'Normalized Response Contract transport must be an object with status/status_code/response_time_ms',\n    { request_id: item.request_id }\n  ) };\n}\n\nif (typeof item.response !== 'object' || item.response === null || Array.isArray(item.response) ||\n    !('headers' in item.response) || !('body' in item.response)) {\n  return { json: errorPayload(\n    'INVALID_NORMALIZED_RESPONSE_CONTRACT',\n    'Normalized Response Contract response must be an object with headers/body',\n    { request_id: item.request_id }\n  ) };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "route-validation-errors-node",
+      "name": "Route Validation Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 260],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "run-tier-0-node",
+      "name": "Decision Engine - Tier 0 (Transport)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 340],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Decision Engine - Tier 0 (transport short-circuit). Part of the\n// reusable deterministic Decision Engine node group (see the Decision\n// Engine Note sticky) - docs/architecture/decision-agent-design.md\n// section 1; docs/contracts/decision-contract.md \"Verdict states\".\n// transport.status_code === null is a guarantee normalized-response-\n// contract.md already makes for a real transport failure - there is no\n// real response to reason about, so no AI call happens here or is ever\n// appropriate for this case.\n//\n// Evidence is built as a structured object (Task 4.2), not a hand-\n// written string - only 'Decision Engine - Finalize' renders it to the\n// string(s) docs/contracts/decision-contract.md's evidence field\n// requires. This node's own output shape is otherwise unchanged from\n// Task 4.1.\nconst item = $input.item.json;\n\nif (item.transport && item.transport.status_code === null) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'BLOCKED',\n      confidence: 1.0,\n      reasoning: `No response was received: transport.status = ${item.transport.status}.`,\n      evidence: [\n        { type: 'transport_status', field: 'transport.status', value: item.transport.status }\n      ],\n      next_action: 'none'\n    },\n    __tier: 'deterministic_transport'\n  } };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "run-tier-1-node",
+      "name": "Decision Engine - Tier 1 (Exact Match)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 340],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Decision Engine - Tier 1 (exact-match fast path). Part of the\n// reusable deterministic Decision Engine node group - see Tier 0's\n// comment and the Decision Engine Note sticky. Only evaluated if Tier 0\n// didn't already resolve the item. expected.status matching\n// transport.status_code exactly is arithmetic, not judgment - no AI\n// call happens here or is ever appropriate for this case. Anything\n// that reaches here unresolved needs Tier 2 (__needs_ai: true), which\n// 'Need AI?' branches on - unchanged from Task 4.1 (tier routing itself\n// is out of scope for this task).\n//\n// Evidence is built as a structured object (Task 4.2) - see Tier 0's\n// comment for why.\nconst item = $input.item.json;\n\nif (item.__verdict) {\n  return { json: { ...item, __needs_ai: false } };\n}\n\nconst expectedStatus = item.expected && typeof item.expected.status === 'number' ? item.expected.status : null;\nconst actualStatus = item.transport ? item.transport.status_code : null;\n\nif (expectedStatus !== null && actualStatus !== null && expectedStatus === actualStatus) {\n  return { json: {\n    ...item,\n    __verdict: {\n      status: 'PASS',\n      confidence: 1.0,\n      reasoning: `Expected HTTP ${expectedStatus} and received HTTP ${actualStatus}. Deterministic status-code match - no AI evaluation was needed.`,\n      evidence: [\n        { type: 'status_code', expected: expectedStatus, actual: actualStatus }\n      ],\n      next_action: 'write_report'\n    },\n    __tier: 'deterministic_exact_match',\n    __needs_ai: false\n  } };\n}\n\nreturn { json: { ...item, __needs_ai: true } };"
+      }
+    },
+    {
+      "id": "need-ai-node",
+      "name": "Need AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 340],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-needs-ai",
+              "leftValue": "={{ $json.__needs_ai }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "assemble-decision-contract-node",
+      "name": "Decision Engine - Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Decision Engine - Finalize. Part of the reusable deterministic\n// Decision Engine node group - see the Decision Engine Note sticky.\n// Final assembly for a Tier 0/Tier 1 (deterministic, no-AI) verdict:\n// renders the structured evidence objects Tier 0/Tier 1 built into the\n// array-of-strings shape docs/contracts/decision-contract.md's evidence\n// field requires (the contract itself is unchanged by Task 4.2 - only\n// this group's internal evidence representation is), then wraps\n// __verdict/__tier into the full Decision Contract shape. This is the\n// only node in the Decision Engine that builds the public contract\n// fields - Tier 0/Tier 1 only ever add __-prefixed working fields.\nconst CONTRACT_VERSION = '1.0';\nconst ORCHESTRATOR_WORKFLOW_VERSION = '1.0';\n\nfunction renderEvidence(entry) {\n  if (entry.type === 'transport_status') {\n    return `${entry.field}: ${entry.value}`;\n  }\n  if (entry.type === 'status_code') {\n    return `status_code: expected ${entry.expected}, actual ${entry.actual}`;\n  }\n  // Defensive fallback for an evidence type this renderer doesn't know\n  // about yet - never drop an evidence entry, just render it plainly.\n  return JSON.stringify(entry);\n}\n\nconst item = $input.item.json;\nconst decidedAt = new Date().toISOString();\n\nreturn { json: {\n  workflow_version: ORCHESTRATOR_WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: item.request_id,\n  response_id: item.response_id,\n  test_case: item.test_case,\n  verdict: {\n    ...item.__verdict,\n    evidence: item.__verdict.evidence.map(renderEvidence)\n  },\n  decision_basis: {\n    tier: item.__tier,\n    model_version: null,\n    prompt_version: null\n  },\n  metadata: {\n    decided_at: decidedAt,\n    source_workflow: '04-response-normalizer',\n    next_workflow: '06-documentation-agent'\n  }\n} };"
+      }
+    },
+    {
+      "id": "build-evidence-packet-node",
+      "name": "Build Evidence Packet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 460],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Builds exactly the evidence packet defined in docs/architecture/\n// decision-agent-design.md section 2 / prompts/decision-agent/v1.md's\n// evidence block template - nothing more. Deliberately excludes\n// request_id, response_id, every test_case field beyond\n// description/expected_result (no run_id, jira_key, agent_reasoning,\n// human_verdict, ...), and all workflow/request metadata - a model that\n// could see prior-run state might anchor on it instead of judging fresh\n// evidence (design doc section 2).\nconst ALLOWED_HEADERS = ['content-type', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after'];\nconst MAX_BODY_CHARS = 8000; // ponytail: fixed cap so an oversized/adversarial response body can't blow up AI cost or request size - real token-budgeted truncation is a cost-optimization concern (design doc section 8), out of scope here\n\nconst item = $input.item.json;\nconst testCase = item.test_case || {};\nconst headers = (item.response && item.response.headers) || {};\n\nconst responseHeaders = {};\nfor (const key of Object.keys(headers)) {\n  if (ALLOWED_HEADERS.includes(key.toLowerCase())) {\n    responseHeaders[key] = headers[key];\n  }\n}\n\nlet responseBody = item.response ? item.response.body : null;\nif (responseBody !== null && responseBody !== undefined) {\n  const serialized = JSON.stringify(responseBody);\n  if (serialized && serialized.length > MAX_BODY_CHARS) {\n    responseBody = serialized.slice(0, MAX_BODY_CHARS);\n  }\n}\n\nconst evidencePacket = {\n  description: testCase.description !== undefined ? testCase.description : null,\n  expected_result: testCase.expected_result !== undefined ? testCase.expected_result : null,\n  expected_status: item.expected && typeof item.expected.status === 'number' ? item.expected.status : null,\n  actual_status: item.transport ? item.transport.status_code : null,\n  response_time_ms: item.transport ? item.transport.response_time_ms : null,\n  response_headers: responseHeaders,\n  response_body: responseBody\n};\n\nreturn { json: { ...item, __evidence_packet: evidencePacket } };"
+      }
+    },
+    {
+      "id": "prompt-builder-node",
+      "name": "Prompt Builder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 460],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Prompt Builder - AI Evaluation component (Task 4.3). Dedicated stage\n// with exactly two jobs, separate from 'Build Claude API Request'\n// (which owns model/tool/API-call structure, not prompt content):\n//\n// 1. Ensures only approved evidence reaches the model - re-filters\n//    __evidence_packet down to exactly the allow-listed keys docs/\n//    architecture/decision-agent-design.md section 2 defines, even\n//    though 'Build Evidence Packet' already constructs only those keys.\n//    This is defense in depth: if that node's construction ever drifts,\n//    this node still refuses to forward anything not on the allow-list.\n// 2. Builds the prompt itself - the prompts/decision-agent/v1.md system\n//    prompt (rules + worked examples) and the user message text from\n//    the verified evidence packet. If prompts/decision-agent/v1.md\n//    changes, SYSTEM_PROMPT below must be updated by hand to match\n//    (prompts/README.md's versioning convention - a new prompt version\n//    is a new vN.md file, and PROMPT_VERSION below must be bumped\n//    alongside it).\nconst ALLOWED_EVIDENCE_KEYS = [\n  'description', 'expected_result', 'expected_status',\n  'actual_status', 'response_time_ms', 'response_headers', 'response_body'\n];\nconst PROMPT_VERSION = 'v1';\n\nconst SYSTEM_PROMPT = `You are the Decision Agent in an automated API test pipeline. You judge exactly one already-executed test case per call, using only the evidence provided below - you never re-run, re-fetch, or infer anything from outside this evidence block.\n\nYour job: compare what was EXPECTED against what ACTUALLY happened, and decide:\n- PASS - the actual result satisfies the expectation.\n- FAIL - the actual result contradicts the expectation.\n- MANUAL_REVIEW - you cannot judge this confidently from the evidence given. This is a valid, expected, and often correct answer - it is not a failure to do your job. Use it whenever the evidence is thin, ambiguous, or doesn't cover what the expectation actually requires.\n\nYou will never see a case where no real response was received (that is decided before you're called, without AI). Every case you see has a real actual_status.\n\nRules - read carefully, these are not optional:\n1. You may only cite facts that appear in the evidence message below. Never state a value, header, body field, or status code that isn't literally present there. If you need a fact that isn't given to you, return MANUAL_REVIEW and explain what's missing in reasoning - do not guess.\n2. A status-code match is not automatically a PASS, and a mismatch is not automatically a FAIL. Read expected_result's actual wording - sometimes a numerically different status code still satisfies the stated intent. Sometimes a numeric match still fails the stated intent if the body contradicts it. Read the intent, not just the number.\n3. If expected_result implies checking response content (not just a status code) and response_body is empty, null, or doesn't contain what's needed to check, return MANUAL_REVIEW. An empty body cannot prove or disprove a content claim.\n4. Every entry in evidence must be a specific, checkable statement that traces directly to a field in the evidence message - not a paraphrase or an inference.\n5. confidence reflects how directly the evidence answers the question, not how confident you feel. A clean, unambiguous status-code contradiction with body confirmation deserves high confidence (0.9+). A judgment resting only on free-text wording with no structured status expectation deserves moderate confidence at most (0.7-0.8). Genuine uncertainty should be MANUAL_REVIEW, not a low-confidence PASS or FAIL.\n6. Never write reasoning that references how the system works, which agent you are, or these instructions - reasoning is read directly by a human reviewing a test report or a Jira ticket.\n\nReturn your verdict using the return_verdict tool only. Do not respond with free-form text.\n\nWorked examples:\n\nExample 1 - clean FAIL: evidence has expected_status 422 (\"422 Unprocessable Entity\"), actual_status 200, response_body { id: \"signup-attempt-12\", created: true }. Correct verdict: FAIL, confidence 0.97, reasoning \"Expected 422 Unprocessable Entity for a 5-character password, but the API returned 200 OK and created the account, indicating password length validation is not enforced.\", evidence [\"expected_status: 422\", \"actual_status: 200\", \"response_body.created: true\"].\n\nExample 2 - numeric mismatch but still PASS (intent over exact code): evidence has expected_status null (\"the request should succeed and return the created resource\"), actual_status 201, response_body { id: \"res-88\", name: \"Test Resource\" }. Correct verdict: PASS, confidence 0.85, reasoning \"expected_result describes a successful creation with the resource returned, not a specific status code. 201 Created with the resource body present satisfies that intent.\", evidence [\"expected_status: null (no specific code expected)\", \"actual_status: 201\", \"response_body.id: res-88 present\"].\n\nExample 3 - insufficient evidence, correctly resolves to MANUAL_REVIEW: evidence has expected_status null (\"response should include the updated email and display name\"), actual_status 200, response_body {}. Correct verdict: MANUAL_REVIEW, confidence 0.3, reasoning \"A 200 OK was returned, but the response body is empty, so it cannot be confirmed whether the updated email and display name are actually present as expected_result requires.\", evidence [\"actual_status: 200\", \"response_body: empty\"].`;\n\nconst item = $input.item.json;\nconst rawPacket = item.__evidence_packet || {};\n\n// Only the allow-listed keys ever reach the model, regardless of what\n// Build Evidence Packet produced - this node's own \"ensure\" step, not\n// just a re-statement of that node's construction.\nconst evidencePacket = {};\nfor (const key of ALLOWED_EVIDENCE_KEYS) {\n  evidencePacket[key] = key in rawPacket ? rawPacket[key] : null;\n}\n\nreturn { json: {\n  ...item,\n  __prompt: {\n    system: SYSTEM_PROMPT,\n    user_message: JSON.stringify(evidencePacket, null, 2)\n  },\n  __prompt_version: PROMPT_VERSION\n} };"
+      }
+    },
+    {
+      "id": "build-ai-request-node",
+      "name": "Build Claude API Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1620, 460],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Build Claude API Request - AI Evaluation component (Task 4.3). Wraps\n// what 'Prompt Builder' produced (system prompt + user message text)\n// into the Anthropic Messages API request shape: model/temperature/\n// max_tokens, and a forced tool call (tool_choice) so the model can\n// only return the fixed verdict schema - never free-form text. This\n// node owns the API-call structure only; 'Prompt Builder' owns the\n// prompt content itself - the two are deliberately separate stages so\n// a change to one (e.g. switching models) never risks touching the\n// other (the evidence allow-list / prompt text).\nconst MODEL = 'claude-haiku-4-5-20251001';\n\nconst item = $input.item.json;\n\nconst requestBody = {\n  model: MODEL,\n  max_tokens: 1024,\n  temperature: 0,\n  system: item.__prompt.system,\n  messages: [\n    { role: 'user', content: item.__prompt.user_message }\n  ],\n  tools: [\n    {\n      name: 'return_verdict',\n      description: 'Return the structured verdict for this test case.',\n      input_schema: {\n        type: 'object',\n        properties: {\n          status: { type: 'string', enum: ['PASS', 'FAIL', 'MANUAL_REVIEW'] },\n          confidence: { type: 'number', minimum: 0, maximum: 1 },\n          reasoning: { type: 'string' },\n          evidence: { type: 'array', items: { type: 'string' } }\n        },\n        required: ['status', 'confidence', 'reasoning', 'evidence']\n      }\n    }\n  ],\n  tool_choice: { type: 'tool', name: 'return_verdict' }\n};\n\nreturn { json: { ...item, __ai_request_body: requestBody, __model_version: MODEL } };"
+      }
+    },
+    {
+      "id": "claude-node",
+      "name": "Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1840, 460],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify({ \"anthropic-version\": \"2023-06-01\", \"content-type\": \"application/json\" }) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.__ai_request_body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Anthropic API Key (x-api-key)"
+        }
+      }
+    },
+    {
+      "id": "validate-decision-contract-node",
+      "name": "Validate Decision Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2060, 380],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Validates the model's structured response against docs/contracts/\n// decision-contract.md before trusting it - malformed output is\n// rejected outright (no retry - that's a later task). A well-formed\n// response is assembled into the full Decision Contract shape, with the\n// same PASS/FAIL confidence-threshold gate decision-contract.md's own\n// \"Verdict states\" table already specifies - this enforces that\n// already-published rule, it does not adjust the confidence value\n// itself (confidence recalibration is explicitly out of scope here).\nconst STAGE = 'decision_agent';\nconst WORKFLOW_VERSION = '1.0';\nconst CONTRACT_VERSION = '1.0';\nconst CONFIDENCE_THRESHOLD = 0.7;\nconst FAIL_AUTO_JIRA_THRESHOLD = 0.8;\nconst VALID_STATUSES = ['PASS', 'FAIL', 'MANUAL_REVIEW'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst requestItem = $('Build Claude API Request').item.json;\nconst aiResponse = $input.item.json;\n\nconst toolUse = Array.isArray(aiResponse.content)\n  ? aiResponse.content.find((block) => block && block.type === 'tool_use' && block.name === 'return_verdict')\n  : null;\n\nif (!toolUse || typeof toolUse.input !== 'object' || toolUse.input === null) {\n  return { json: errorPayload(\n    'INVALID_MODEL_RESPONSE',\n    'Model response did not include a return_verdict tool call',\n    { request_id: requestItem.request_id }\n  ) };\n}\n\nconst v = toolUse.input;\n\nif (!VALID_STATUSES.includes(v.status)) {\n  return { json: errorPayload(\n    'INVALID_MODEL_RESPONSE',\n    `Model returned an unsupported status \"${v.status}\"`,\n    { request_id: requestItem.request_id, received_status: v.status }\n  ) };\n}\n\nif (typeof v.confidence !== 'number' || Number.isNaN(v.confidence) || v.confidence < 0 || v.confidence > 1) {\n  return { json: errorPayload(\n    'INVALID_MODEL_RESPONSE',\n    `Model confidence must be a number between 0 and 1, received \"${v.confidence}\"`,\n    { request_id: requestItem.request_id }\n  ) };\n}\n\nif (typeof v.reasoning !== 'string' || v.reasoning.trim() === '') {\n  return { json: errorPayload(\n    'INVALID_MODEL_RESPONSE',\n    'Model reasoning must be a non-empty string',\n    { request_id: requestItem.request_id }\n  ) };\n}\n\nif (!Array.isArray(v.evidence) || v.evidence.some((e) => typeof e !== 'string')) {\n  return { json: errorPayload(\n    'INVALID_MODEL_RESPONSE',\n    'Model evidence must be an array of strings',\n    { request_id: requestItem.request_id }\n  ) };\n}\n\n// Enforce the confidence-threshold boundary decision-contract.md already\n// defines for PASS/FAIL - below it, the verdict isn't trustworthy enough\n// to stand on its own and becomes MANUAL_REVIEW instead. confidence\n// itself is passed through unchanged either way.\nlet finalStatus = v.status;\nif ((finalStatus === 'PASS' || finalStatus === 'FAIL') && v.confidence < CONFIDENCE_THRESHOLD) {\n  finalStatus = 'MANUAL_REVIEW';\n}\n\nlet nextAction;\nif (finalStatus === 'PASS') {\n  nextAction = 'write_report';\n} else if (finalStatus === 'FAIL') {\n  nextAction = v.confidence >= FAIL_AUTO_JIRA_THRESHOLD ? 'create_jira' : 'flag_for_review';\n} else {\n  nextAction = 'flag_for_review';\n}\n\nconst decidedAt = new Date().toISOString();\n\nreturn { json: {\n  workflow_version: WORKFLOW_VERSION,\n  contract_version: CONTRACT_VERSION,\n  request_id: requestItem.request_id,\n  response_id: requestItem.response_id,\n  test_case: requestItem.test_case,\n  verdict: {\n    status: finalStatus,\n    confidence: v.confidence,\n    reasoning: v.reasoning,\n    evidence: v.evidence,\n    next_action: nextAction\n  },\n  decision_basis: {\n    tier: 'ai_assisted',\n    model_version: requestItem.__model_version,\n    prompt_version: requestItem.__prompt_version\n  },\n  metadata: {\n    decided_at: decidedAt,\n    source_workflow: '04-response-normalizer',\n    next_workflow: '06-documentation-agent'\n  }\n} };"
+      }
+    },
+    {
+      "id": "build-ai-service-error-node",
+      "name": "Build AI Service Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2060, 560],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Handles the Claude node's error output - the AI call itself failed\n// (network error, timeout, or a non-2xx from Anthropic's API, since the\n// node is left at its default neverError:false so any failure routes\n// here uniformly). Deliberately a single generic code, not a classifier\n// like 03-http-executor's - anything more elaborate (retry, fallback,\n// escalation) is AI failure recovery, explicitly out of scope for this\n// task. This still guarantees one output is always produced for this\n// item (an ERROR payload), never a silent drop or an unhandled crash.\nconst STAGE = 'decision_agent';\nconst WORKFLOW_VERSION = '1.0';\n\nconst requestItem = $('Build Claude API Request').item.json;\nconst rawError = $input.item.json;\nconst message = String(rawError.error || rawError.message || JSON.stringify(rawError));\n\nreturn { json: {\n  status: 'ERROR',\n  stage: STAGE,\n  code: 'AI_SERVICE_UNAVAILABLE',\n  message: `Decision Agent AI call for request_id \"${requestItem.request_id}\" failed: ${message}`,\n  details: {\n    request_id: requestItem.request_id,\n    test_case: requestItem.test_case,\n    expected: requestItem.expected\n  },\n  timestamp: new Date().toISOString(),\n  workflow_version: WORKFLOW_VERSION\n} };"
+      }
+    },
+    {
+      "id": "documentation-agent-handoff",
+      "name": "Documentation Agent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2280, 260],
+      "notes": "Hand-off boundary to the Documentation Agent (and, for next_action: create_jira, the Jira Agent) - both Task 4+, not yet built. Receives either a Decision Contract (docs/contracts/decision-contract.md) or an ERROR payload (docs/contracts/error-payload.md). No Excel write or Jira ticket drafting happens in this workflow.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Normalized Response Contract Trigger": {
+      "main": [
+        [
+          { "node": "Validate Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Contract": {
+      "main": [
+        [
+          { "node": "Route Validation Errors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route Validation Errors": {
+      "main": [
+        [
+          { "node": "Documentation Agent", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Decision Engine - Tier 0 (Transport)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Decision Engine - Tier 0 (Transport)": {
+      "main": [
+        [
+          { "node": "Decision Engine - Tier 1 (Exact Match)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Decision Engine - Tier 1 (Exact Match)": {
+      "main": [
+        [
+          { "node": "Need AI?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Need AI?": {
+      "main": [
+        [
+          { "node": "Build Evidence Packet", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Decision Engine - Finalize", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Decision Engine - Finalize": {
+      "main": [
+        [
+          { "node": "Documentation Agent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Evidence Packet": {
+      "main": [
+        [
+          { "node": "Prompt Builder", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prompt Builder": {
+      "main": [
+        [
+          { "node": "Build Claude API Request", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Claude API Request": {
+      "main": [
+        [
+          { "node": "Claude", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude": {
+      "main": [
+        [
+          { "node": "Validate Decision Contract", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build AI Service Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Decision Contract": {
+      "main": [
+        [
+          { "node": "Documentation Agent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build AI Service Error": {
+      "main": [
+        [
+          { "node": "Documentation Agent", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

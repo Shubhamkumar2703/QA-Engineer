@@ -22,10 +22,14 @@ how that shape gets filled in.
 
 ## Producer
 
-`n8n/workflows/05-decision-agent.json` (Task 4, not yet built - this
-contract is the interface it will produce once it exists, the same
-"contract before workflow" pattern every prior task in this project has
-followed).
+`n8n/workflows/05-decision-orchestrator.json` (Task 4.1). Named
+"orchestrator" rather than "agent" because it decides *when* AI is
+needed and validates what comes back, rather than being the AI call
+itself - see `docs/architecture/decisions/005-manual-review-replaces-not-run.md`
+and `docs/workflow-standards.md`'s numbering table. "Decision Agent"
+remains the conceptual role name used elsewhere in this project's docs
+(e.g. `docs/architecture/milestone-1.md` section 5); this workflow file
+is that role's Task 4.1 implementation, not a different concept.
 
 ## Consumer
 
@@ -218,18 +222,23 @@ real payload carries the full object per
 
 Every failure mode this workflow can itself produce becomes the shared
 error object (`docs/contracts/error-payload.md`) with
-`stage: "decision_agent"`. The exact code list is finalized when
-`05-decision-agent.json` is built (Task 4.1+) and added to this
-document's error-code table and `error-payload.md`'s at that point, per
-`docs/workflow-standards.md`'s rule that a new `code` is added in the
-same change that introduces it - anticipated codes, subject to
-confirmation during implementation:
+`stage: "decision_agent"`. Shipped as of Task 4.1:
 
-| Anticipated failure | Anticipated `code` |
+| Failure | `code` |
 |---|---|
 | Input isn't a well-formed Normalized Response Contract | `INVALID_NORMALIZED_RESPONSE_CONTRACT` |
-| The model's response fails schema validation after retry | `INVALID_MODEL_RESPONSE` |
-| A hallucination guard rejects the model's output in a way that can't be safely downgraded to `MANUAL_REVIEW` (e.g. the model returned a `status` value outside the four allowed) | `UNGROUNDED_VERDICT` |
+| The model's response doesn't include the forced `return_verdict` tool call, or its input fails schema validation | `INVALID_MODEL_RESPONSE` |
+| The AI provider call itself failed (network error, timeout, non-2xx) | `AI_SERVICE_UNAVAILABLE` |
+
+Neither `INVALID_MODEL_RESPONSE` nor `AI_SERVICE_UNAVAILABLE` triggers a
+retry - Task 4.1 validates and reports once; retry logic and AI-failure
+recovery are explicitly out of scope for that task.
+
+**Not yet shipped:** `UNGROUNDED_VERDICT`, anticipated for when a
+hallucination guard rejects the model's output in a way that can't be
+safely downgraded to `MANUAL_REVIEW`. This requires the grounding-check
+logic Task 4.4 (Confidence & Hallucination Guards) introduces - Task 4.1
+deliberately does not implement grounding validation.
 
 A `MANUAL_REVIEW` verdict is **not** one of these - it is a normal,
 successfully-produced Decision Contract. This workflow only produces an
