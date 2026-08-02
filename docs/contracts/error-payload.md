@@ -73,6 +73,26 @@ special-case a producer.
 | `DUPLICATE_TEST_ID` | `ingestion` | The same `test_id` appears more than once in the source file. |
 | `NO_ROUTE_FOR_VERIFICATION_TYPE` | `planner_routing` | Safety-net check in case a `verification_type` passes ingestion validation but has no entry in the routing table - should not normally trigger while `SUPPORTED_VERIFICATION_TYPES` and `AGENT_ROUTES` are kept in sync (see `docs/workflow-standards.md`). |
 
+## Error codes currently in use (HTTP Executor workflow, `stage: "http_executor"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_API_REQUEST_CONTRACT` | The incoming item isn't a well-formed API Request Contract (docs/contracts/api-request-contract.md) - missing a required field, or a field has the wrong shape. |
+| `UNSUPPORTED_HTTP_METHOD` | `method` isn't one of `GET`/`POST`/`PUT`/`PATCH`/`DELETE`. Re-checked independently of the API Request Builder's own validation. |
+| `INVALID_URL` | `url` doesn't parse as a URL, or its protocol isn't `http`/`https`. |
+| `UNSUPPORTED_AUTHENTICATION` | `authentication.type` isn't one of `none`/`bearer`/`api_key`. |
+| `MISSING_CREDENTIALS` | A `bearer`/`api_key` authentication type was requested but the HTTP Executor's own environment doesn't have the corresponding credential (`API_AUTH_BEARER_TOKEN` / `API_AUTH_API_KEY_VALUE`) configured. |
+| `TIMEOUT_ERROR` | The request did not complete within the contract's `timeout`. |
+| `CONNECTION_REFUSED` | The target host actively refused the connection. |
+| `DNS_RESOLUTION_FAILED` | The target host name could not be resolved. |
+| `NETWORK_ERROR` | Any other network-level failure that isn't one of the above - a catch-all so a failure is never silently dropped even if its exact cause can't be classified. |
+
+A non-2xx/3xx HTTP status code returned by the target API (e.g. `404`,
+`500`) is **not** an error under this contract - it is a normal
+`status_code` value on the HTTP Response Contract
+(docs/contracts/http-response-contract.md). The HTTP Executor has no
+opinion on whether a status code represents a pass or a fail.
+
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
 

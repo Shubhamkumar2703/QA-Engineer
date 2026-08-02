@@ -12,8 +12,8 @@ this repo follows. Significant technical choices are recorded in
 Every workflow follows the conventions in `docs/workflow-standards.md` and
 communicates using the shared JSON shapes documented in `docs/contracts/`
 (see `docs/contracts/README.md` for the full list — currently the Planner
-Contract, the API Request Contract, and the shared Error Payload) — read
-those before adding or changing a workflow.
+Contract, the API Request Contract, the HTTP Response Contract, and the
+shared Error Payload) — read those before adding or changing a workflow.
 
 ## Quickstart
 
@@ -33,14 +33,16 @@ import the latest workflow JSON from `n8n/workflows/`.
 
 Milestone 1. Task 1 (repository + Docker Compose + n8n + Postgres) is
 still in progress. Task 2 (Excel ingestion), Task 2.5 (workflow standards
-+ shared contracts), and Task 3.1 (API Request Builder,
-`n8n/workflows/02-api-request-builder.json`) have been built but not yet
-verified inside a running n8n instance — see
++ shared contracts), Task 3.1 (API Request Builder,
+`n8n/workflows/02-api-request-builder.json`), and Task 3.2 (HTTP
+Executor, `n8n/workflows/03-http-executor.json`) have been built but not
+yet verified inside a running n8n instance — see
 `docs/architecture/milestone-1.md` for the full task breakdown and
 `PROJECT_STATUS.md` for current task status.
 
 "API Agent" (Milestone 1's original Task 3) is being built as three
 sub-workflows: 3.1 API Request Builder (done — prepares a request, never
-sends it), 3.2 HTTP Executor (not started — sends the prepared request),
-3.3 Response Normalizer (not started — shapes the raw response for the
-Decision Agent). See the numbering note in `docs/workflow-standards.md`.
+sends it), 3.2 HTTP Executor (done — sends the prepared request, captures
+the raw response, never judges PASS/FAIL), 3.3 Response Normalizer (not
+started — shapes the raw response for the Decision Agent). See the
+numbering note in `docs/workflow-standards.md`.
