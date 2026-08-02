@@ -110,3 +110,73 @@ transport failure, normalizer-level error), not just the happy path.
   committed workflow JSON and chained it exactly as n8n would connect the
   nodes, against synthetic inputs (not a from-scratch reimplementation).
   197/197 checks passed. Never run inside real n8n - same caveat as 3.2.
+
+## Task 4.0 (Decision Agent foundations) - things worth knowing
+
+- ADR 005 replaced the documented `NOT_RUN` verdict state with
+  `MANUAL_REVIEW` and dropped `next_action: "update_jira"` in favor of
+  `flag_for_review` - `milestone-1.md` section 5 was amended to match.
+  If anything still references `NOT_RUN`/`update_jira`, it's stale.
+- `docs/architecture/decision-agent-design.md` is the full reasoning
+  design (tier funnel, evidence rules, confidence calculation,
+  hallucination guards, cost strategy). `docs/contracts/decision-contract.md`
+  only specifies the shape that design produces - read both, the
+  contract alone doesn't explain *why*.
+- `docs/reviews/task-4.0-decision-agent-foundations-review.md` flagged
+  four real gaps before implementation: the 0.7/0.8 confidence
+  thresholds are uncalibrated placeholders; the evidence-grounding check
+  has a concept but no algorithm; AI-service-failure handling was
+  undesigned; the few-shot examples were untested against a real model.
+  Task 4.1 resolved the AI-service-failure gap (see below); the other
+  three are still open, deliberately out of scope for 4.1.
+
+## Task 4.1 (Decision Orchestrator) - things worth knowing
+
+- The workflow file is named `05-decision-orchestrator.json`, not
+  `05-decision-agent.json` as earlier docs (`decision-contract.md`'s
+  original Producer field, `workflow-standards.md`'s numbering table)
+  had assumed before this task existed - both were updated to match.
+  "Decision Agent" is still the correct conceptual role name used
+  elsewhere in the docs; this file is that role's Task 4.1
+  implementation, not a different concept. If a future doc still says
+  `05-decision-agent.json`, it's stale.
+- Resolved the AI-service-failure gap the Task 4.0 review flagged as
+  undesigned: a failed AI call (network error, timeout, non-2xx from
+  Anthropic) produces a single generic `AI_SERVICE_UNAVAILABLE` ERROR
+  payload - deliberately not a classifier like 03's `codeFor()`, since
+  anything more elaborate (retry, fallback, escalation) is AI failure
+  recovery, out of scope for this task. This is a real design decision,
+  not a placeholder - revisit only if a future task actually needs
+  retry/escalation behavior.
+- The confidence-threshold gate (PASS/FAIL below 0.7 confidence becomes
+  MANUAL_REVIEW) is enforced in `Validate Decision Contract`, reading
+  `decision-contract.md`'s own already-published Verdict States table -
+  this is contract enforcement, not confidence recalibration. The
+  model's reported confidence value is never adjusted, only which final
+  `verdict.status` gets written out is gated by it. Don't confuse this
+  with Task 4.4's evidence-based confidence *capping* (design doc
+  section 3) - that adjusts the number itself and hasn't been built yet.
+- The AI call uses Anthropic's Messages API directly via
+  `n8n-nodes-base.httpRequest` (not a LangChain/AI-specific n8n node) -
+  same reasoning as 03's HTTP Executor: a plain HTTP call to a
+  well-documented, stable REST API is lower-risk than depending on an
+  AI-node parameter schema that changes across n8n versions and
+  couldn't be verified without a live instance anyway. `tool_choice`
+  forces the model to call a `return_verdict` tool with a fixed JSON
+  Schema - it cannot return free-form text, which is both the
+  structured-output mechanism and a real (if partial) prompt-injection
+  mitigation against a hostile response body in the evidence packet.
+- The API key is supplied via an n8n Header Auth credential referenced
+  by the `Claude` node (`credentials.httpHeaderAuth`), never via `$env`
+  or embedded in the workflow JSON - see `n8n/credentials.example.json`.
+  This deliberately avoids the exact anti-pattern the Task 3.2 review
+  flagged (a real credential ending up in item data / execution logs).
+- **The AI call itself was never exercised against the real Anthropic
+  API** - no credential was available in this environment. Verified
+  everything else (tier routing, evidence packet construction/exclusion
+  rules, request building, response schema validation, the confidence
+  gate, error handling) with a script harness that mocks the HTTP call's
+  response shape - 50/50 checks passed. Before trusting this in a real
+  run: import into live n8n with a real credential and check at least
+  one real Tier 2 call actually returns a `tool_use` block matching the
+  assumed shape - that assumption is unverified.

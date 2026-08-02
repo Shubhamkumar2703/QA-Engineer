@@ -28,9 +28,9 @@ in `n8n/workflows/`, numbered in execution order.
 |---|---|
 | `01-ingestion.json` | `01 - Excel Ingestion` |
 | `02-api-request-builder.json` | `02 - API Request Builder` |
-| `03-http-executor.json` (planned, Task 3.2) | `03 - HTTP Executor` |
-| `04-response-normalizer.json` (planned, Task 3.3) | `04 - Response Normalizer` |
-| `05-decision-agent.json` (planned) | `05 - Decision Agent` |
+| `03-http-executor.json` | `03 - HTTP Executor` |
+| `04-response-normalizer.json` | `04 - Response Normalizer` |
+| `05-decision-orchestrator.json` (Task 4.1; renamed from the originally-planned `05-decision-agent.json` - see `docs/contracts/decision-contract.md`'s Producer note) | `05 - Decision Orchestrator` |
 | `06-documentation-agent.json` (planned) | `06 - Documentation Agent` |
 | `07-jira-agent.json` (planned) | `07 - Jira Agent` |
 

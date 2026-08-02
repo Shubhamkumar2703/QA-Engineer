@@ -112,6 +112,21 @@ under this contract, provided its `code` is one this workflow recognizes
 only produces an ERROR payload when it cannot make sense of its input at
 all.
 
+## Error codes currently in use (Decision Orchestrator workflow, `stage: "decision_agent"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_NORMALIZED_RESPONSE_CONTRACT` | The incoming item is neither a well-formed Normalized Response Contract (docs/contracts/normalized-response-contract.md) nor a well-formed upstream ERROR payload - missing a required field, or the item isn't even a JSON object. |
+| `INVALID_MODEL_RESPONSE` | The model's response either didn't include the forced `return_verdict` tool call, or the tool call's input failed schema validation (`status` not one of `PASS`/`FAIL`/`MANUAL_REVIEW`, `confidence` outside `0`-`1`, `reasoning` not a non-empty string, or `evidence` not an array of strings). No retry is attempted (Task 4.1 scope). |
+| `AI_SERVICE_UNAVAILABLE` | The call to the AI provider itself failed (network error, timeout, or a non-2xx from the provider's API) - as distinct from `INVALID_MODEL_RESPONSE`, where the call succeeded but its content was malformed. Deliberately a single generic code, not a classified taxonomy - AI failure recovery (retry, fallback, escalation) is out of scope for this task. |
+
+A `MANUAL_REVIEW` verdict, at any confidence level, is **not** one of
+these - it is a normal, successfully-produced Decision Contract
+(docs/contracts/decision-contract.md). The `UNGROUNDED_VERDICT` code
+anticipated in that document's error table is deliberately not shipped
+yet - it requires the grounding-check logic Task 4.4 (Confidence &
+Hallucination Guards) introduces, not this workflow.
+
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
 
