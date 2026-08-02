@@ -130,9 +130,15 @@ Every Decision Agent call must return this exact shape, not free-form prose:
 }
 ```
 
-`status` is one of `PASS | FAIL | BLOCKED | NOT_RUN`. `next_action` is one of
-`write_report | create_jira | update_jira | none`. Downstream agents (Documentation,
+`status` is one of `PASS | FAIL | BLOCKED | MANUAL_REVIEW`. `next_action` is one of
+`write_report | create_jira | flag_for_review | none`. Downstream agents (Documentation,
 Jira) read this object directly — they never re-derive a verdict from prose.
+
+`status`/`next_action` amended from the original `NOT_RUN`/`update_jira`
+values by ADR 005 (`docs/architecture/decisions/005-manual-review-replaces-not-run.md`)
+- see that ADR for why `NOT_RUN` can never actually occur in this
+pipeline and what `MANUAL_REVIEW`/`flag_for_review` mean instead. Full
+field-by-field spec: `docs/contracts/decision-contract.md`.
 
 ---
 

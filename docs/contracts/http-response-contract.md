@@ -37,7 +37,7 @@ a response contract.
 
 | Field | Type | Description |
 |---|---|---|
-| `workflow_version` | string | Version of the **producing workflow** (`03-http-executor.json`), currently `"1.0"`. |
+| `workflow_version` | string | Version of the **producing workflow** (`03-http-executor.json`), currently `"1.1"`. |
 | `contract_version` | string | Version of **this contract's shape**, currently `"1.0"`. Same split rationale as `api-request-contract.md`. |
 | `request_id` | string (UUID v4) | Copied unchanged from the API Request Contract that produced this response - the join key back to the original request. Never regenerated. |
 | `response_id` | string (UUID v4) | Unique per executed response. Lets a single request be retried without losing correlation with a specific attempt's response. |
@@ -80,7 +80,14 @@ becomes the shared error object (`docs/contracts/error-payload.md`) with
 Every one of these carries `details.request_id` (when a request_id was
 available) so a failed execution can still be correlated back to its
 originating API Request Contract even though it never produced a response
-contract.
+contract. Since `1.1`, every one of these also carries `details.test_case`
+and `details.expected` (both `null` if unavailable) - the Response
+Normalizer (Task 3.3) is required to preserve `test_case`/`expected` for
+every input, including transport failures, and can only do that if this
+workflow's error payloads carry them forward. This is additive `details`
+content only, per `docs/contracts/error-payload.md`'s own rule that
+workflow-specific context belongs in `details` rather than as a new
+top-level field - it does not change the shared Error Payload's shape.
 
 A non-2xx/3xx HTTP status returned by the target API (`400`, `404`,
 `500`, ...) is **not** one of these failures - it is a completely normal
@@ -159,6 +166,11 @@ Same rules as `docs/contracts/api-request-contract.md`:
 - Bump `workflow_version` when `03-http-executor.json`'s internal logic
   changes in a way worth tracking, independent of whether the contract
   shape changed.
+- `workflow_version` `1.0` → `1.1` (Task 3.3): every error payload this
+  workflow produces now includes `test_case`/`expected` in `details` -
+  see "What produces an ERROR instead" above. Internal logic change only;
+  `contract_version` stayed `1.0` because the HTTP Response Contract's
+  own shape (the success path) did not change.
 
 ## Compatibility rules
 

@@ -93,6 +93,25 @@ A non-2xx/3xx HTTP status code returned by the target API (e.g. `404`,
 (docs/contracts/http-response-contract.md). The HTTP Executor has no
 opinion on whether a status code represents a pass or a fail.
 
+## Error codes currently in use (Response Normalizer workflow, `stage: "response_normalizer"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_HTTP_RESPONSE_CONTRACT` | The incoming item is neither a well-formed HTTP Response Contract (docs/contracts/http-response-contract.md) nor a well-formed upstream ERROR payload from the HTTP Executor - missing a required field, or the item isn't even a JSON object. |
+| `INVALID_STATUS_CODE` | The input claims to be a successful HTTP Response Contract, but `status_code` isn't an integer between `100` and `599`. |
+| `MALFORMED_RESPONSE` | `headers` isn't a JSON object, or `body` can't be safely carried through as JSON (e.g. a circular structure). |
+| `UNKNOWN_TRANSPORT_ERROR` | An upstream HTTP Executor error `code` isn't one the Response Normalizer's `TRANSPORT_CODE_MAP` knows how to categorize into a transport status - a real drift signal between the two workflows, surfaced rather than silently guessed. |
+| `NORMALIZATION_FAILED` | Reserved generic catch-all for a normalization failure not covered by the more specific codes above. |
+
+A transport failure (timeout, connection refused, DNS failure, a
+pre-flight validation error from the HTTP Executor) is **not** an error
+under this contract, provided its `code` is one this workflow recognizes
+- it is normalized into a `transport.status` value (`TIMEOUT`,
+`NETWORK_ERROR`, ...) on a normal Normalized Response Contract
+(docs/contracts/normalized-response-contract.md). The Response Normalizer
+only produces an ERROR payload when it cannot make sense of its input at
+all.
+
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
 
