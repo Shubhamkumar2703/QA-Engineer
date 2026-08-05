@@ -19,6 +19,7 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.2 - Decision Engine (extracted Tier 0/1) | `05-decision-orchestrator.json` (same file, refactored) | Done. Tier 0 + Tier 1 + final contract assembly consolidated into a named "Decision Engine" node group, using structured evidence objects internally (rendered to strings only at final assembly - `decision-contract.md`'s shape is unchanged). Script harness: 60/60 checks, no regression to Tier 2. See "Verification notes" below. |
 | Task 4.3 - AI Evaluation (Prompt Builder) | `05-decision-orchestrator.json` (same file, extended) | Done. Split the former "Build AI Request" node into a dedicated "Prompt Builder" stage (evidence allow-list re-verification + prompt content) and "Build Claude API Request" (API-call structure only). Script harness: 68/68 checks, no regression to Tier 0/1/2. See "Verification notes" below. |
 | Task 4.4 - Confidence & Trust Layer | `05-decision-orchestrator.json` (same file, extended) | Done. Replaced the single "Validate Decision Contract" node with "Validate AI Response Shape" -> "Ground Evidence" -> "Apply Trust Rules": structured field/value evidence grounding (not natural-language comparison), deterministic confidence capping (no longer passed through raw), hallucination detection (forces `MANUAL_REVIEW`), and a new `UNGROUNDED_VERDICT` error for internally-inconsistent verdicts. Script harness: 82/82 checks, no regression to Tier 0/1 or contract shape. See "Verification notes" below. |
+| Task 4.5 - Verification, Benchmark & Calibration | `docs/reviews/task-4.5-verification.md` | Done. No workflow changes required - the shipped `05-decision-orchestrator.json` was correct against every real test. First real (not mocked) LLM verification in this project: 5 live calls to a local Ollama server (`llama3:latest`), which surfaced a real malformed-JSON response and a real "confidently wrong despite fully-grounded evidence" case. **Milestone 1 Decision Engine marked production-ready for local testing** (Ollama), with real Anthropic API + live n8n execution still unverified. See "Verification notes" below and the full report. |
 | Documentation Agent | `06-documentation-agent.json` | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
@@ -119,13 +120,31 @@ text is never rewritten, only status/confidence/next_action are ever
 adjusted. Re-ran the full harness plus 14 new checks: 82/82 passed, zero
 regression to Tier 0/1 or the Decision Contract's shape.
 
+**Task 4.5 (Verification, Benchmark & Calibration):** Full report at
+`docs/reviews/task-4.5-verification.md`. The headline: this is the
+**first task to test the AI path against a real model** rather than a
+scripted response - 5 live calls to a local Ollama server
+(`llama3:latest`), with genuine timing/token/prompt-size data. Confirmed
+end-to-end (Tier 0/1 deterministic, Tier 2 real-model) with zero
+workflow changes required. Two real (not hypothetical) findings: a
+malformed/truncated JSON response from the real model (correctly
+rejected by `Validate AI Response Shape`, exactly as designed), and a
+case where the model cited fully real, correctly-grounded evidence and
+still drew the wrong conclusion from it (`PASS` at 0.95 confidence for a
+verdict its own `reasoning` field describes as a contradiction) - the
+Trust Layer's structural grounding check has no way to catch this, since
+nothing about it is structurally wrong. Confidence-threshold calibration
+is inconclusive (this benchmark's samples didn't land near the 0.3/0.7
+boundaries), not confirmed-good. Existing 82-check regression suite:
+zero regressions.
+
 ## Next up
 
-Task 4.5 (Decision Contract Validation) - the Task 4 tree's last item,
-likely a final consistency/schema-conformance pass now that 4.1-4.4 have
-built tier routing, the AI call, prompt construction, and the trust
-layer end-to-end. Before any of them: import
-`05-decision-orchestrator.json` into a real n8n instance with a real
-Anthropic credential and run at least one Tier 2 case end-to-end -
-nothing about the actual AI call has been verified
-outside this environment's mocked harness.
+Task 5 (Documentation Agent). Before it, per the Task 4.5 report's
+recommendations: don't treat high AI confidence as a correctness
+guarantee (a real false-positive was demonstrated at 0.95); prioritize a
+real n8n + real Anthropic credential verification pass, still the
+largest unclosed gap across every Task 4 sub-task; and note that a
+semantic-consistency check (does the verdict follow from the reasoning,
+not just is the evidence grounded) is now a concretely-scoped, evidenced
+future capability, not a hypothetical one.

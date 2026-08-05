@@ -37,9 +37,8 @@ still in progress. Task 2 (Excel ingestion), Task 2.5 (workflow standards
 + shared contracts), Task 3.1 (API Request Builder,
 `n8n/workflows/02-api-request-builder.json`), Task 3.2 (HTTP Executor,
 `n8n/workflows/03-http-executor.json`), Task 3.3 (Response Normalizer,
-`n8n/workflows/04-response-normalizer.json`), and Task 4.1 (Decision
-Orchestrator, `n8n/workflows/05-decision-orchestrator.json`) have been
-built but not yet verified inside a running n8n instance — see
+`n8n/workflows/04-response-normalizer.json`), and all of Task 4 (Decision
+Agent, `n8n/workflows/05-decision-orchestrator.json`) are built — see
 `docs/architecture/milestone-1.md` for the full task breakdown and
 `PROJECT_STATUS.md` for current task status.
 
@@ -51,14 +50,28 @@ the raw response, never judges PASS/FAIL), 3.3 Response Normalizer (done
 contract for the Decision Agent, still never judging PASS/FAIL). See the
 numbering note in `docs/workflow-standards.md`.
 
-Task 4 (Decision Agent) is underway: 4.0 established the design (ADR 005,
-the Decision Contract, prompt v1 — `docs/architecture/decision-agent-design.md`),
-and 4.1 built the orchestrating workflow — a three-tier funnel that
-returns `BLOCKED`/`PASS` deterministically without AI for transport
-failures and exact status-code matches, and calls Claude (forced
-structured output, no free-form text) only for everything else. This is
-the first workflow in the pipeline allowed to call an AI model, and it
-still makes no PASS/FAIL judgment beyond what the fixed tier rules and
-the model's own schema-validated verdict determine — no prompt
-optimization, confidence recalibration, or hallucination guards yet
-(later Task 4 sub-tasks).
+**Task 4 (Decision Agent) is complete.** 4.0 established the design (ADR
+005, the Decision Contract, prompt v1 —
+`docs/architecture/decision-agent-design.md`); 4.1 built the
+orchestrating three-tier funnel (`BLOCKED`/`PASS` deterministically for
+transport failures and exact status-code matches, AI only for everything
+else); 4.2 extracted the deterministic Tier 0/1 logic into a reusable
+"Decision Engine" node group; 4.3 split prompt construction into a
+dedicated "Prompt Builder" stage, isolated from the Anthropic API-call
+structure; 4.4 added a Confidence & Trust Layer (evidence grounding
+against the real evidence packet, deterministic confidence capping,
+hallucination detection); 4.5 verified the complete flow end-to-end,
+including — for the first time — against a **real, locally-running
+Ollama model**, not just scripted responses. See
+`docs/reviews/task-4.5-verification.md` for the full benchmark/
+calibration report.
+
+**Decision Engine status: production-ready for local testing (Ollama)**,
+with two gaps still open before it's fully verified: no real Anthropic
+API call has ever been tested (only mocked), and nothing has run inside
+a live n8n instance yet (every task has verified via extracted node code
+in a script harness). The Task 4.5 report also documents a real,
+reproduced finding worth knowing before trusting AI verdicts at face
+value: a model can cite fully real, correctly-grounded evidence and
+still draw the wrong conclusion from it — the Trust Layer's grounding
+check is structural, not semantic, and doesn't catch that case.
