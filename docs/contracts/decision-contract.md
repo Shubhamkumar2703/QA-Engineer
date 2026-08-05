@@ -222,23 +222,34 @@ real payload carries the full object per
 
 Every failure mode this workflow can itself produce becomes the shared
 error object (`docs/contracts/error-payload.md`) with
-`stage: "decision_agent"`. Shipped as of Task 4.1:
+`stage: "decision_agent"`:
 
-| Failure | `code` |
-|---|---|
-| Input isn't a well-formed Normalized Response Contract | `INVALID_NORMALIZED_RESPONSE_CONTRACT` |
-| The model's response doesn't include the forced `return_verdict` tool call, or its input fails schema validation | `INVALID_MODEL_RESPONSE` |
-| The AI provider call itself failed (network error, timeout, non-2xx) | `AI_SERVICE_UNAVAILABLE` |
+| Failure | `code` | Shipped |
+|---|---|---|
+| Input isn't a well-formed Normalized Response Contract | `INVALID_NORMALIZED_RESPONSE_CONTRACT` | Task 4.1 |
+| The model's response doesn't include the forced `return_verdict` tool call, or its input fails structural validation (wrong type, out-of-range confidence, empty/missing evidence) | `INVALID_MODEL_RESPONSE` | Task 4.1, tightened (empty-evidence check) in Task 4.4 |
+| The AI provider call itself failed (network error, timeout, non-2xx) | `AI_SERVICE_UNAVAILABLE` | Task 4.1 |
+| The model returned a structurally valid but internally inconsistent verdict - a `PASS`/`FAIL` at confidence below the decisive-confidence floor (0.3), contradicting its own instruction to use `MANUAL_REVIEW` under genuine uncertainty | `UNGROUNDED_VERDICT` | Task 4.4 |
 
-Neither `INVALID_MODEL_RESPONSE` nor `AI_SERVICE_UNAVAILABLE` triggers a
-retry - Task 4.1 validates and reports once; retry logic and AI-failure
-recovery are explicitly out of scope for that task.
+None of these codes trigger a retry - each is validated and reported
+once; retry logic and AI-failure recovery remain explicitly out of scope
+through Task 4.4.
 
-**Not yet shipped:** `UNGROUNDED_VERDICT`, anticipated for when a
-hallucination guard rejects the model's output in a way that can't be
-safely downgraded to `MANUAL_REVIEW`. This requires the grounding-check
-logic Task 4.4 (Confidence & Hallucination Guards) introduces - Task 4.1
-deliberately does not implement grounding validation.
+**Evidence grounding failures are deliberately *not* on this list.**
+When some or all of the model's evidence can't be traced back to what it
+was actually given, the response is a normal, successfully-produced
+Decision Contract with `verdict.status: "MANUAL_REVIEW"` and a reduced
+`verdict.confidence` (Task 4.4's Confidence & Trust Layer,
+`docs/architecture/decision-agent-design.md` section 1's `Ground
+Evidence` / `Apply Trust Rules` nodes in `05-decision-orchestrator.json`)
+- not an ERROR payload. `UNGROUNDED_VERDICT`'s name is a legacy of this
+document's original (Task 4.0) anticipated-codes note, which expected
+grounding failures to need the ERROR path; in practice a grounding
+failure is always safely downgradable to `MANUAL_REVIEW` (a human can
+always review it), so `UNGROUNDED_VERDICT` ended up reserved for the
+narrower, genuinely un-downgradable case above instead - the name is
+kept for the field/message trail already established rather than
+introducing a fresh code.
 
 A `MANUAL_REVIEW` verdict is **not** one of these - it is a normal,
 successfully-produced Decision Contract. This workflow only produces an
