@@ -127,6 +127,16 @@ these - it is a normal, successfully-produced Decision Contract
 Confidence & Trust Layer downgrades a verdict to `MANUAL_REVIEW` because
 its evidence couldn't be grounded.
 
+## Error codes currently in use (Documentation Agent workflow, `stage: "documentation_agent"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_DECISION_CONTRACT` | The incoming item is neither a well-formed Decision Contract (docs/contracts/decision-contract.md) nor a well-formed upstream ERROR payload - missing a required field, `verdict` malformed (invalid status enum, out-of-range confidence, empty evidence), `decision_basis` missing `tier`, or `metadata` missing `decided_at`. |
+
+A `MANUAL_REVIEW` report, at any confidence level, is **not** one of
+these - it is a normal, successfully-produced Report Contract
+(docs/contracts/report-contract.md) with `report.manual_review: true`.
+
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
 

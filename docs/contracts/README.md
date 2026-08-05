@@ -77,6 +77,18 @@ File: [`decision-contract.md`](./decision-contract.md)
 | Purpose | The `{status, confidence, reasoning, evidence, next_action}` verdict shape from ADR 004 / `milestone-1.md` section 5, updated per ADR 005 (`MANUAL_REVIEW` replaces `NOT_RUN`, `update_jira` dropped, `flag_for_review` added). The first contract in the pipeline whose producer may call an AI model - every contract before it is produced by an AI-free workflow. Full reasoning design: `docs/architecture/decision-agent-design.md`. |
 | Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `contract_version`. Carries `test_case` forward unchanged, same as every prior contract. Adds `decision_basis` (new) so a $0 deterministic verdict and a paid model call are distinguishable per instance, for both cost tracking and hallucination auditing. |
 
+### Report Contract
+
+File: [`report-contract.md`](./report-contract.md)
+
+| | |
+|---|---|
+| Producer | `n8n/workflows/06-documentation-agent.json` (Task 5) |
+| Consumer | Future renderer workflows only - an Excel Writer (Task 5.1, not yet built), and eventually PDF/Google Sheets/dashboard/Jira consumers. Each renderer reads the same Report Contract; none of them is this contract's producer. |
+| Current version | `workflow_version: "1.0"`, `report_version: "1.0"` |
+| Purpose | The canonical, output-format-independent QA report record - `{test_case, decision, report}` - built by formatting-only from a validated Decision Contract. No AI call, no re-judgment, no Excel/PDF/Sheets/dashboard/Jira-specific field anywhere in this shape; those are downstream renderers, not part of what this contract means. |
+| Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `report_version`. Carries `test_case` and the full `decision.verdict`/`decision.decision_basis` forward unchanged, same convention as every prior contract. |
+
 ### Error Payload
 
 File: [`error-payload.md`](./error-payload.md)
@@ -99,8 +111,14 @@ their task begins (`CLAUDE.md`, "Out of Scope").
 
 | Contract | Producer (planned) | Consumer (planned) | Formalizes |
 |---|---|---|---|
-| Documentation Contract | Documentation Agent | (terminal - writes to the Excel report via the Excel MCP/node) | What the Documentation Agent needs from a Decision Contract to write a correct report row, and what it confirms back (success/failure of the write). |
+| Excel Report Contract | Excel Writer (Task 5.1) | (terminal - writes a row to the Excel report via the Excel MCP/node) | What the Excel Writer needs from a Report Contract to write a correct report row, and what it confirms back (success/failure of the write). Renderer-specific; does not change what the Report Contract itself means. |
 | Jira Contract | Jira Agent | Human approval queue, then Jira MCP/node | The draft-ticket shape (`draft_ticket` output) and the separate approval → `create_ticket` hand-off described in `docs/architecture/milestone-1.md` section 4, plus the duplicate-ticket check's input/output. |
+
+**Note (Task 5):** the "Documentation Contract" this table previously
+anticipated has been superseded by the Report Contract above, built as
+Task 5 itself rather than left for a later task - see that document's
+Purpose section for why it's deliberately renderer-independent (Excel is
+one of several future consumers, not the producer's only concern).
 
 When one of these is built, add it to "Current contracts" above using the
 same table shape, and move its row out of this table.

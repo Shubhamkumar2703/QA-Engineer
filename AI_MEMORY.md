@@ -356,3 +356,59 @@ project.
   against real model output on the first try - the zero-diff result
   itself is worth recording, since it's easy to assume a "verification
   sprint" must find something to fix.
+
+## Task 5 (Documentation Agent) - things worth knowing
+
+`06-documentation-agent.json` is the first workflow in this project whose
+job is purely presentational - it makes no judgment about a test outcome
+(that already happened in the Decision Contract it consumes) and calls no
+AI model. That made it the simplest workflow built so far: three nodes,
+no tier funnel, no branching beyond the standard ERROR-passthrough IF.
+
+- **The Report Contract is deliberately not "the Excel contract with a
+  different name."** `docs/contracts/README.md`'s "Future contracts"
+  table originally anticipated a "Documentation Contract" whose consumer
+  was literally "(terminal - writes to the Excel report)" - i.e. Excel
+  baked into the contract's own definition. Task 5's brief explicitly
+  reversed that: Excel is now just the first of several planned renderers
+  (PDF, Google Sheets, dashboards, Jira), all reading the same Report
+  Contract, none of them privileged. Concretely this meant refusing to
+  add any field shaped like `excel_row` or `sheet_column` - a renderer
+  that needs a format-specific value computes it from `report.*` in its
+  *own* workflow, never asks this contract to carry it.
+- **"Formatting only, never reasoning" turned out to have one genuine
+  edge case worth a real design decision: `actual_result`.** The Decision
+  Contract's `verdict.evidence` is a flat array of strings with no
+  semantic tags, but this project's own producers already render it in
+  exactly three recurring `field: value`-shaped conventions (Tier 1:
+  `status_code: expected X, actual Y`; Tier 0: `transport.status: X`; the
+  AI path, per `prompts/decision-agent/v1.md` Rule 4: `actual_status: X`).
+  Rather than inventing a summary, `Build Report Contract` reuses the same
+  `field: value` regex `Ground Evidence` in `05-decision-orchestrator.json`
+  already established, and picks out whichever evidence entry matches one
+  of those three known field names - falling back to the first evidence
+  entry (never fabricated text) if none match. This is presentation
+  (which literal string to surface first), not judgment.
+- **`execution_time` is deliberately the *decision's* timestamp, not a
+  new one.** It would have been easy to stamp `execution_time` with
+  `new Date()` at report-build time, but that measures when the
+  Documentation Agent happened to run, not when the test was decided -
+  those can legitimately drift (batch runs, retries, queueing). The one
+  genuinely new timestamp in the whole contract is
+  `report.metadata.documented_at`, which is explicitly a fact about the
+  Documentation Agent's own run, kept separate from and never confused
+  with the decision's own `decided_at`.
+- **`report.metadata.next_workflow` is `null`, not a workflow name -
+  the first contract in this project where that field is deliberately
+  empty.** Every prior contract's `metadata.next_workflow` names exactly
+  one consumer. The Report Contract can be read by zero, one, or several
+  renderer workflows at once (Excel, PDF, Sheets, dashboard, Jira), so
+  naming one would misrepresent the fan-out - `null` here is a real
+  design signal (terminal with respect to a single named next step), not
+  an oversight or a placeholder to fill in later.
+- **Verified with the same script-harness approach as every prior task**
+  (no live n8n instance available in this environment) - 61/61 checks,
+  covering both deterministic and AI-assisted `decision_basis.tier`
+  values across all four verdict statuses, byte-for-byte `test_case`/
+  `decision` preservation, and 8 malformed-Decision-Contract rejections.
+  See `PROJECT_STATUS.md`'s "Verification notes" for the full list.

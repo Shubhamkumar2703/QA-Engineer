@@ -13,8 +13,9 @@ Every workflow follows the conventions in `docs/workflow-standards.md` and
 communicates using the shared JSON shapes documented in `docs/contracts/`
 (see `docs/contracts/README.md` for the full list — currently the Planner
 Contract, the API Request Contract, the HTTP Response Contract, the
-Normalized Response Contract, the Decision Contract, and the shared Error
-Payload) — read those before adding or changing a workflow.
+Normalized Response Contract, the Decision Contract, the Report Contract,
+and the shared Error Payload) — read those before adding or changing a
+workflow.
 
 ## Quickstart
 
@@ -75,3 +76,15 @@ reproduced finding worth knowing before trusting AI verdicts at face
 value: a model can cite fully real, correctly-grounded evidence and
 still draw the wrong conclusion from it — the Trust Layer's grounding
 check is structural, not semantic, and doesn't catch that case.
+
+**Task 5 (Documentation Agent) is complete.**
+`n8n/workflows/06-documentation-agent.json` consumes a validated Decision
+Contract and produces the new Report Contract
+(`docs/contracts/report-contract.md`) — the canonical, output-format-
+independent QA report record that Excel, PDF, Google Sheets, dashboards,
+and Jira will all read as downstream renderers. It performs formatting
+only: no AI call, no re-judgment, and no renderer-specific field or logic
+anywhere in the workflow or the contract it produces. Verified with the
+same script-harness approach as every prior workflow (61/61 checks) —
+still not yet imported/run inside a live n8n instance. See
+`PROJECT_STATUS.md` for the full verification notes.
