@@ -88,3 +88,23 @@ anywhere in the workflow or the contract it produces. Verified with the
 same script-harness approach as every prior workflow (61/61 checks) —
 still not yet imported/run inside a live n8n instance. See
 `PROJECT_STATUS.md` for the full verification notes.
+
+**Task 5.1 (Excel Writer) is complete.**
+`n8n/workflows/06.1-excel-writer.json` is the first renderer built on top
+of the Report Contract, and establishes the pattern every future renderer
+follows: `Renderer Adapter → COLUMN_MAP → Renderer` (see
+`docs/renderers/excel-renderer.md`). It consumes only the Report
+Contract — never a Decision Contract — locates the matching row by Test
+ID, and updates only the nine renderer-owned columns (Status, Actual
+Result, Notes, Tester Notes, Confidence, Decision Basis, Manual Review,
+Execution Date, Evidence Summary); the original test definition (Test ID,
+Description, Steps, Expected Result) is structurally impossible for this
+workflow to write, since those columns never appear in its column map at
+all. Read-modify-write over the whole workbook keeps every other row, and
+every other column on the updated row, byte-for-byte untouched, and makes
+reruns idempotent. Verified with the same script-harness approach as
+every prior workflow (113/113 checks, including a byte-for-byte
+idempotency check across two consecutive runs) — still not yet imported/
+run inside a live n8n instance, and real xlsx read/write behavior remains
+unverified against an actual file. See `PROJECT_STATUS.md` for the full
+verification notes.
