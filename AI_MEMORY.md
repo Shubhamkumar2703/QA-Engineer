@@ -471,3 +471,66 @@ polish, it's the actual target shape.
   workbook input from the first run's output, and asserting the final row
   set is byte-for-byte identical both times - not just "no crash on
   rerun," an actual convergence check.
+
+## Task 6 (Jira Agent) - things worth knowing
+
+`07-jira-agent.json` is this project's second renderer-shaped workflow
+(after the Excel Writer) but the first one whose job is deciding *whether
+to act at all*, not just how - most of its work happens before any
+formatting: `PASS`/`BLOCKED` never get a draft, and `MANUAL_REVIEW` is a
+policy call gated behind a single config constant, not a hardcoded yes/no.
+
+- **`priority` reusing `next_action` instead of a confidence threshold is
+  the most consequential design decision in this task, and it wasn't the
+  obvious first instinct.** The brief asks for a "Priority" field and it
+  would have been easy to write `confidence >= 0.8 ? 'High' : 'Medium'`
+  directly in this workflow - a threshold that already exists, just not
+  here. That would have created two independent copies of the same
+  policy number (0.8) in two files, silently able to drift out of sync.
+  Reading `decision.verdict.next_action` instead (`create_jira` → `High`,
+  `flag_for_review` → `Medium`) means there is exactly one place
+  (`05-decision-orchestrator.json`'s `Apply Trust Rules`,
+  `TRUST_CONFIG.FAIL_AUTO_JIRA_THRESHOLD`) that owns "how confident is
+  confident enough" - this is `docs/workflow-standards.md`'s "nothing
+  downstream re-derives a value another workflow already computed" rule
+  applied to a field the Decision Contract never explicitly names as
+  reusable, but structurally already answers.
+- **`report` inside the Jira Draft Contract is the *entire* Report
+  Contract, not a projection of just the fields this task's brief lists
+  ("Summary, Description, Expected Result, Actual Result, Reproduction
+  Steps, Evidence, Labels, Priority, Components").** Carrying the full
+  object costs nothing extra to build (it's already in scope as `item`)
+  and means a future Duplicate Check or approval-queue consumer that
+  needs, say, `report.decision.decision_basis.model_version` for cost
+  auditing on drafted tickets never needs a Jira Draft Contract shape
+  change - the same "carry the whole upstream object forward, never a
+  hand-picked subset" pattern the Report Contract itself established for
+  `decision.verdict`/`decision.decision_basis` in Task 5.
+- **`jira.manual_review` is populated even when `jira.required` is
+  `false`.** It would have been consistent with the other fields to null
+  it out too when no draft is built, but `manual_review` answers a
+  different question than the other nine fields (all of which describe a
+  *ticket that doesn't exist yet*) - it's a fact about the Report
+  Contract's own verdict, independent of whether Jira drafting is
+  turned on for that verdict. Keeping it populated lets a consumer tell
+  "MANUAL_REVIEW with drafting off" apart from "FAIL," "PASS," and
+  "BLOCKED" even by reading only the `jira` object, without reaching back
+  into `report.report.status`.
+- **Verified with the same script-harness approach as every prior task**
+  (no live n8n instance available) - 62/62 checks, including patching
+  `DRAFT_ON_MANUAL_REVIEW` to `true` in-harness (string-replacing the
+  extracted node source before executing it) to prove the configurable
+  path actually works, not just that the default-off path does - a
+  config flag that's never been flipped in a test isn't verified, it's
+  assumed.
+- **Every stage past "Jira Draft Contract" in the architecture diagram
+  (Duplicate Check, Draft Ticket, Human Approval, Create/Update Jira) is
+  a documented NoOp, not a stub with a `// TODO`.** Each one's `notes`
+  field states exactly what a future task would implement there and
+  where that implementation would plug into the existing contract
+  (additively - e.g. Duplicate Check would add `jira.duplicate_of`, never
+  reshape an existing field). This is the same "extension point over
+  placeholder" discipline `05-decision-orchestrator.json`'s Confidence &
+  Trust Layer sticky notes and `06.1-excel-writer.json`'s Architecture
+  Note already established - a reader should never have to guess what an
+  empty NoOp was *for*.

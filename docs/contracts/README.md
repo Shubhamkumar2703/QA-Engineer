@@ -84,10 +84,22 @@ File: [`report-contract.md`](./report-contract.md)
 | | |
 |---|---|
 | Producer | `n8n/workflows/06-documentation-agent.json` (Task 5) |
-| Consumer | Future renderer workflows only - an Excel Writer (Task 5.1, not yet built), and eventually PDF/Google Sheets/dashboard/Jira consumers. Each renderer reads the same Report Contract; none of them is this contract's producer. |
+| Consumer | Renderer workflows only - the Excel Writer (`n8n/workflows/06.1-excel-writer.json`, Task 5.1) and the Jira Agent (`n8n/workflows/07-jira-agent.json`, Task 6), and eventually PDF/Google Sheets/dashboard consumers. Each renderer reads the same Report Contract; none of them is this contract's producer. |
 | Current version | `workflow_version: "1.0"`, `report_version: "1.0"` |
 | Purpose | The canonical, output-format-independent QA report record - `{test_case, decision, report}` - built by formatting-only from a validated Decision Contract. No AI call, no re-judgment, no Excel/PDF/Sheets/dashboard/Jira-specific field anywhere in this shape; those are downstream renderers, not part of what this contract means. |
 | Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `report_version`. Carries `test_case` and the full `decision.verdict`/`decision.decision_basis` forward unchanged, same convention as every prior contract. |
+
+### Jira Draft Contract
+
+File: [`jira-draft-contract.md`](./jira-draft-contract.md)
+
+| | |
+|---|---|
+| Producer | `n8n/workflows/07-jira-agent.json` (Task 6) |
+| Consumer | Not yet built - a future duplicate-check integration, human approval queue, and Jira API submission workflow. This contract's producer stops at the draft; no Jira issue is ever created by it. |
+| Current version | `workflow_version: "1.0"`, `jira_version: "1.0"` |
+| Purpose | The canonical, not-yet-submitted representation of a Jira ticket for a `FAIL` (always) or `MANUAL_REVIEW` (configurable, off by default) test case - `{report, jira}`. No AI call, no direct Jira API call anywhere in this shape or its producer; `priority` reuses the Decision Contract's already-computed `next_action` rather than re-deriving a confidence threshold. |
+| Backward compatibility | Same additive-only rule, tracked via `workflow_version` / `jira_version`. Carries the complete Report Contract forward unchanged under `report` (not a subset), same convention as every prior contract. |
 
 ### Error Payload
 
@@ -112,13 +124,19 @@ their task begins (`CLAUDE.md`, "Out of Scope").
 | Contract | Producer (planned) | Consumer (planned) | Formalizes |
 |---|---|---|---|
 | Excel Report Contract | Excel Writer (Task 5.1) | (terminal - writes a row to the Excel report via the Excel MCP/node) | What the Excel Writer needs from a Report Contract to write a correct report row, and what it confirms back (success/failure of the write). Renderer-specific; does not change what the Report Contract itself means. |
-| Jira Contract | Jira Agent | Human approval queue, then Jira MCP/node | The draft-ticket shape (`draft_ticket` output) and the separate approval → `create_ticket` hand-off described in `docs/architecture/milestone-1.md` section 4, plus the duplicate-ticket check's input/output. |
+| Jira Submission Contract | Human approval queue / future Jira submission workflow | Jira MCP/node | The separate approval → `create_ticket` hand-off described in `docs/architecture/milestone-1.md` section 4, plus the duplicate-ticket check's real input/output, once the Jira Draft Contract's "Duplicate Check" / "Draft Ticket" / "Human Approval" / "Create / Update Jira" extension points (`docs/contracts/jira-draft-contract.md`) are actually implemented. |
 
 **Note (Task 5):** the "Documentation Contract" this table previously
 anticipated has been superseded by the Report Contract above, built as
 Task 5 itself rather than left for a later task - see that document's
 Purpose section for why it's deliberately renderer-independent (Excel is
 one of several future consumers, not the producer's only concern).
+
+**Note (Task 6):** the "Jira Contract" this table previously anticipated
+has been superseded by the Jira Draft Contract above, built as Task 6
+itself. What remains future work is only the part after the draft -
+duplicate-check, approval, and submission - now tracked as the "Jira
+Submission Contract" row.
 
 When one of these is built, add it to "Current contracts" above using the
 same table shape, and move its row out of this table.

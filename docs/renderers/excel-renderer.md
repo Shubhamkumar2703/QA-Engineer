@@ -172,21 +172,14 @@ ingestion, Task 2).
 
 ## Error codes (`stage: "excel_writer"`)
 
-| Code | Meaning |
-|---|---|
-| `INVALID_REPORT_CONTRACT` | The incoming item is neither a well-formed Report Contract (`docs/contracts/report-contract.md`) nor a well-formed upstream ERROR payload. |
-| `REPORT_FILE_UNAVAILABLE` | The workbook could not be read (missing, locked, or otherwise unreadable). |
-| `TARGET_ROW_NOT_FOUND` | No row in the workbook matches the Report Contract's `test_case.test_id`. |
-| `WORKBOOK_WRITE_FAILED` | The updated workbook could not be written back to disk. |
-
-No retry logic exists for any of these - same "fail loudly, once, no
-classification" convention as every prior workflow's error handling
-(`docs/contracts/error-payload.md`).
-
-**Not yet added to `docs/contracts/error-payload.md`'s shared table** -
-Task 5.1's deliverables didn't include a contracts-doc update, so these
-four codes are documented here only for now. See "Recommendations before
-Task 5.2" in `PROJECT_STATUS.md`.
+See `docs/contracts/error-payload.md`'s "Excel Writer workflow" section
+for the canonical table (`INVALID_REPORT_CONTRACT`,
+`REPORT_FILE_UNAVAILABLE`, `TARGET_ROW_NOT_FOUND`,
+`WORKBOOK_WRITE_FAILED`) - added there in Task 6, closing the gap this
+section originally flagged (Task 5.1's own deliverable list hadn't
+included a contracts-doc update). No retry logic exists for any of
+these - same "fail loudly, once, no classification" convention as every
+prior workflow's error handling.
 
 ---
 

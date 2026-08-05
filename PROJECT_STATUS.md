@@ -22,7 +22,7 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.5 - Verification, Benchmark & Calibration | `docs/reviews/task-4.5-verification.md` | Done. No workflow changes required - the shipped `05-decision-orchestrator.json` was correct against every real test. First real (not mocked) LLM verification in this project: 5 live calls to a local Ollama server (`llama3:latest`), which surfaced a real malformed-JSON response and a real "confidently wrong despite fully-grounded evidence" case. **Milestone 1 Decision Engine marked production-ready for local testing** (Ollama), with real Anthropic API + live n8n execution still unverified. See "Verification notes" below and the full report. |
 | Task 5 - Documentation Agent | `06-documentation-agent.json` | Built. Consumes only the Decision Contract and produces the new Report Contract (`docs/contracts/report-contract.md`) - formatting only, no AI call, no Excel/PDF/Sheets/dashboard/Jira-specific logic anywhere in this file. Script harness: 61/61 checks. See "Verification notes" below. |
 | Task 5.1 - Excel Writer | `06.1-excel-writer.json` | Built. First Report Contract renderer, follows the new Renderer Adapter → COLUMN_MAP → Renderer pattern (`docs/renderers/excel-renderer.md`). Consumes only the Report Contract - never a Decision Contract, never AI. Updates only the 9 renderer-owned columns on the matching row; `Test ID`/`Description`/`Steps`/`Expected Result` are never referenced in its column map, so they can't be written by construction. Script harness: 113/113 checks. See "Verification notes" below. |
-| Jira Agent | `07-jira-agent.json` | Not started |
+| Task 6 - Jira Agent | `07-jira-agent.json` | Built. Consumes only the Report Contract - never a Decision Contract - and produces the new Jira Draft Contract (`docs/contracts/jira-draft-contract.md`). Drafts for `FAIL` always, `MANUAL_REVIEW` only if `DRAFT_ON_MANUAL_REVIEW` is enabled (off by default); never for `PASS`/`BLOCKED`. No AI call, no direct Jira API call anywhere in this file - Duplicate Check/Draft Ticket/Human Approval/Create-Update Jira are documented NoOp extension points. Script harness: 62/62 checks. See "Verification notes" below. |
 
 ## Verification notes
 
@@ -206,20 +206,57 @@ the actual xlsx read/write behavior of `n8n-nodes-base.readWriteFile` /
 `n8n-nodes-base.spreadsheetFile` is unverified against a real file - only
 this workflow's own Code-node logic was exercised.
 
+**Task 6 (Jira Agent):** `07-jira-agent.json` consumes only the Report
+Contract (`docs/contracts/report-contract.md`) and produces the new Jira
+Draft Contract (`docs/contracts/jira-draft-contract.md`) -
+`{workflow_version, jira_version, report, jira}`. `Validate Contract`
+(envelope check, same upstream-ERROR-passthrough convention as every
+prior workflow) → `Route Validation Errors` (same IF pattern) → `Build
+Jira Draft Contract` (the only real work - every `jira.*` field is either
+reused verbatim from the Report Contract, the routing decision it already
+carries (`decision.verdict.next_action` → `priority`, never a re-derived
+confidence threshold), or built via a fixed lookup table (`labels`,
+`components`)) → `Duplicate Check (Extension Point)` (NoOp, architecture
+only per this task's scope) → `Draft Required?` (IF on `jira.required`)
+→ `Draft Ticket` → `Human Approval` → `Create / Update Jira` (all three
+documented NoOp hand-offs, no Jira API call anywhere in this file) or
+`No Draft Required`, converging at `Jira Layer Complete`. Same
+script-harness approach as every prior task - `Validate Contract` and
+`Build Jira Draft Contract` extracted from the committed JSON and chained
+as n8n would connect them. 62/62 checks passed: `PASS`/`BLOCKED` produce
+`jira.required: false` with every other `jira.*` field null/empty (never
+fabricated); `FAIL` always produces a required draft with all nine
+deterministic fields verified individually (summary template, reasoning
+reused verbatim as description, `test_case.expected_result`/`steps`
+reused unchanged, `decision.verdict.evidence` reused verbatim, priority
+correctly split `High`/`Medium` by `next_action`, labels/components
+correct); `MANUAL_REVIEW` verified both with `DRAFT_ON_MANUAL_REVIEW` off
+(default - no draft) and patched on (draft with `Medium` priority and a
+`manual-review` label, not `needs-triage`); an upstream ERROR payload
+passes through `Validate Contract` unchanged; 9 malformed-Report-Contract
+cases all produce `INVALID_REPORT_CONTRACT`; and two runs of the same
+input produce byte-for-byte identical drafts (determinism). Not yet
+imported/run inside a live n8n instance, same caveat as every prior
+workflow. Duplicate Check, Draft Ticket, Human Approval, and Create /
+Update Jira remain unimplemented NoOp extension points by design - no
+real Jira API call exists anywhere in this project yet.
+
 ## Next up
 
-Task 5.2 - a second renderer (Google Sheets is the natural next
-candidate, per the "One Small Improvement" architecture note) to prove
-the Renderer Adapter → COLUMN_MAP → Renderer pattern generalizes in
-practice, not just in design. Before it: `docs/contracts/error-payload.md`
-doesn't yet list Task 5.1's four `excel_writer` error codes (documented
-only in `docs/renderers/excel-renderer.md` for now - see that document's
-"Error codes" section) - worth folding into the shared table the next
-time that document is touched, per `docs/workflow-standards.md`'s "every
-new code gets added in the same change that introduces it" rule, which
-this task's deliverable list didn't include. Also still open from Task 4:
-don't treat high AI confidence as a correctness guarantee (a real
-false-positive was demonstrated at 0.95 in Task 4.5); a real n8n + real
-Anthropic credential verification pass, and now also a real xlsx
-read/write verification pass, remain the largest unclosed gaps across the
-whole pipeline.
+Milestone 1 Integration - every stage from ingestion (01) through the
+Jira Agent (07) now has a producer, and the pipeline's contract chain
+(Planner → API Request → HTTP Response → Normalized Response → Decision
+→ Report → Excel/Jira Draft) is complete end-to-end on paper. The
+largest unclosed gaps, none of them new to this task: (1) nothing has
+ever run inside a live n8n instance - every workflow so far has only been
+verified via extracted-Code-node script harnesses; (2) the AI path has
+never been tested against a real Anthropic credential, only Ollama
+(Task 4.5) and mocks; (3) real xlsx read/write behavior
+(`readWriteFile`/`spreadsheetFile`) is unverified against an actual file;
+(4) don't treat high AI confidence as a correctness guarantee - a real
+false-positive was demonstrated at 0.95 in Task 4.5; (5) the Jira Layer's
+Duplicate Check → Draft Ticket → Human Approval → Create/Update Jira
+chain is architecture-only - no real Jira API integration exists. An
+end-to-end integration pass (a real n8n instance, one test script,
+through all seven workflows) is the natural next milestone activity
+before adding new capability.

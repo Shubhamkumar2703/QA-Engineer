@@ -137,6 +137,35 @@ A `MANUAL_REVIEW` report, at any confidence level, is **not** one of
 these - it is a normal, successfully-produced Report Contract
 (docs/contracts/report-contract.md) with `report.manual_review: true`.
 
+## Error codes currently in use (Excel Writer workflow, `stage: "excel_writer"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_REPORT_CONTRACT` | The incoming item is neither a well-formed Report Contract (docs/contracts/report-contract.md) nor a well-formed upstream ERROR payload - missing a required field, `test_case` missing `test_id`, or `report` missing/malformed `status`/`actual_result`/`reasoning`/`tester_notes`/`confidence`/`decision_basis`/`manual_review`/`evidence_summary`/`execution_time`. |
+| `REPORT_FILE_UNAVAILABLE` | The report workbook could not be read (missing, locked, or otherwise unreadable). |
+| `TARGET_ROW_NOT_FOUND` | No row in the workbook matches the Report Contract's `test_case.test_id` - this workflow updates an existing row only, it never appends one. |
+| `WORKBOOK_WRITE_FAILED` | The updated workbook could not be written back to disk. |
+
+Retroactively added here (workflow built in Task 5.1) so this table
+stays the single shared reference for every stage's codes, per
+`docs/workflow-standards.md`'s "every new code gets added to this
+document's table in the same change that introduces it" rule - Task
+5.1's own deliverable list hadn't included an update to this file; see
+`docs/renderers/excel-renderer.md`'s "Error codes" section, now
+superseded by this table as the canonical location.
+
+## Error codes currently in use (Jira Agent workflow, `stage: "jira_agent"`)
+
+| Code | Meaning |
+|---|---|
+| `INVALID_REPORT_CONTRACT` | The incoming item is neither a well-formed Report Contract (docs/contracts/report-contract.md) nor a well-formed upstream ERROR payload - missing a required field, `test_case` missing `test_id`/`description`/`expected_result`/`steps`/`verification_type`, `report` malformed (invalid status enum, non-string `actual_result`/`reasoning`, non-boolean `manual_review`), or `decision.verdict` missing a non-empty `evidence` array / `next_action`. |
+
+A Jira Draft Contract with `jira.required: false` (the normal outcome for
+`PASS`, `BLOCKED`, and - by default - `MANUAL_REVIEW`) is **not** one of
+these - it is a normal, successfully-produced Jira Draft Contract
+(docs/contracts/jira-draft-contract.md) that simply doesn't need a
+ticket.
+
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
 

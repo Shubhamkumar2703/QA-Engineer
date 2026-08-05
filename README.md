@@ -14,8 +14,8 @@ communicates using the shared JSON shapes documented in `docs/contracts/`
 (see `docs/contracts/README.md` for the full list — currently the Planner
 Contract, the API Request Contract, the HTTP Response Contract, the
 Normalized Response Contract, the Decision Contract, the Report Contract,
-and the shared Error Payload) — read those before adding or changing a
-workflow.
+the Jira Draft Contract, and the shared Error Payload) — read those
+before adding or changing a workflow.
 
 ## Quickstart
 
@@ -108,3 +108,27 @@ idempotency check across two consecutive runs) — still not yet imported/
 run inside a live n8n instance, and real xlsx read/write behavior remains
 unverified against an actual file. See `PROJECT_STATUS.md` for the full
 verification notes.
+
+**Task 6 (Jira Agent) is complete.**
+`n8n/workflows/07-jira-agent.json` consumes only the Report Contract —
+never a Decision Contract — and produces the new Jira Draft Contract
+(`docs/contracts/jira-draft-contract.md`): a deterministic, not-yet-
+submitted representation of a Jira ticket, built for `FAIL` always and
+`MANUAL_REVIEW` only if explicitly configured (off by default), never for
+`PASS`/`BLOCKED`. No AI call, no direct Jira API call anywhere in this
+file — `priority` reuses the Decision Contract's already-computed
+`next_action` rather than re-deriving a confidence threshold, and every
+other field is reused verbatim or built from a fixed lookup table.
+Duplicate Check, Draft Ticket, Human Approval, and Create/Update Jira are
+documented NoOp extension points — human approval remains a hard
+requirement before anything is ever created in Jira, and no real Jira API
+integration exists yet. Verified with the same script-harness approach as
+every prior workflow (62/62 checks, including the configurable
+`MANUAL_REVIEW` path exercised both off and on) — still not yet
+imported/run inside a live n8n instance. See `PROJECT_STATUS.md` for the
+full verification notes.
+
+With Task 6 complete, every stage from Excel ingestion through a drafted
+(not yet submitted) Jira ticket now has a producing workflow — see
+`PROJECT_STATUS.md`'s "Next up" for what a full Milestone 1 integration
+pass still needs before any of this runs against real infrastructure.
