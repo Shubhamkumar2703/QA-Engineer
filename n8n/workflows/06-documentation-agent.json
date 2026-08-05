@@ -1,0 +1,139 @@
+{
+  "name": "06 - Documentation Agent",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -320],
+      "parameters": {
+        "width": 520,
+        "height": 380,
+        "content": "## Milestone 1 - Task 5: Documentation Agent\n\nConsumes the Decision Contract produced by 05-decision-orchestrator (docs/contracts/decision-contract.md) and produces a Report Contract (docs/contracts/report-contract.md) - the canonical, output-format-independent QA report record.\n\nThis workflow performs formatting only. It never invokes an AI model and never performs reasoning - every field in the Report Contract is either carried forward unchanged from the Decision Contract or derived from it with a fixed, deterministic template (string concatenation / lookup table), never generated. No Excel, Google Sheets, PDF, dashboard, or Jira logic exists anywhere in this file - those are downstream renderers that consume the Report Contract this workflow produces (Task 5.1+, not yet built)."
+      }
+    },
+    {
+      "id": "sticky-contract-note",
+      "name": "Contract Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [780, -320],
+      "parameters": {
+        "width": 480,
+        "height": 380,
+        "content": "## Design notes\n\n- 'Route Validation Errors' mirrors the same-named pattern in every prior workflow: an item that's already an ERROR payload (upstream, or from 'Validate Contract') skips report-building entirely and passes straight through.\n- 'Build Report Contract' is a single node because there is no branching logic left to do by this point - every value it needs was already validated/computed by the Decision Orchestrator. Splitting it into multiple nodes would not separate any distinct responsibility (see docs/workflow-standards.md's 'one job per node' - this one job is 'render the Decision Contract's already-final fields into report fields').\n- `decision` in the Report Contract preserves the full verdict/decision_basis/request_id/response_id/decided_at from the Decision Contract unchanged, so a renderer or auditor can always trace a report row back to the exact decision it came from without re-deriving anything.\n- `report.*` fields are the human/renderer-facing formatting layer: reused text (reasoning), reused structured data (evidence, joined - never re-summarized), and fixed per-status templates (tester_notes) - never freeform generation."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "Decision Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 260],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-contract-node",
+      "name": "Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Confirms the incoming item is a well-formed Decision Contract\n// (docs/contracts/decision-contract.md) before any report-building runs.\n// This is the only node that validates the contract's envelope shape -\n// 'Build Report Contract' trusts it completely.\nconst STAGE = 'documentation_agent';\nconst WORKFLOW_VERSION = '1.0';\nconst VALID_VERDICT_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'MANUAL_REVIEW'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\n// ERROR payloads produced upstream (Decision Orchestrator, or anything\n// earlier) are not Decision Contracts and must not be re-validated as\n// one - pass them through unchanged, same convention as every prior\n// workflow.\nif (item && item.status === 'ERROR') {\n  return { json: item };\n}\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_DECISION_CONTRACT',\n    'Decision Contract must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nconst requiredFields = [\n  'workflow_version', 'contract_version', 'request_id', 'response_id',\n  'test_case', 'verdict', 'decision_basis', 'metadata'\n];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_DECISION_CONTRACT',\n    `Decision Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields, request_id: item.request_id || null }\n  ) };\n}\n\nconst v = item.verdict;\nif (typeof v !== 'object' || v === null || Array.isArray(v) ||\n    !VALID_VERDICT_STATUSES.includes(v.status) ||\n    typeof v.confidence !== 'number' || v.confidence < 0 || v.confidence > 1 ||\n    typeof v.reasoning !== 'string' ||\n    !Array.isArray(v.evidence) || v.evidence.length === 0 ||\n    typeof v.next_action !== 'string') {\n  return { json: errorPayload(\n    'INVALID_DECISION_CONTRACT',\n    'Decision Contract verdict must be an object with a valid status/confidence/reasoning/evidence/next_action',\n    { request_id: item.request_id }\n  ) };\n}\n\nconst db = item.decision_basis;\nif (typeof db !== 'object' || db === null || Array.isArray(db) || typeof db.tier !== 'string') {\n  return { json: errorPayload(\n    'INVALID_DECISION_CONTRACT',\n    'Decision Contract decision_basis must be an object with a tier',\n    { request_id: item.request_id }\n  ) };\n}\n\nif (typeof item.metadata !== 'object' || item.metadata === null || Array.isArray(item.metadata) ||\n    typeof item.metadata.decided_at !== 'string') {\n  return { json: errorPayload(\n    'INVALID_DECISION_CONTRACT',\n    'Decision Contract metadata must be an object with decided_at',\n    { request_id: item.request_id }\n  ) };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "route-validation-errors-node",
+      "name": "Route Validation Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 260],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "build-report-contract-node",
+      "name": "Build Report Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 340],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Build Report Contract - the Documentation Agent's only real work.\n// Every value below is either carried forward unchanged from the\n// Decision Contract or derived from it through a fixed, deterministic\n// template. No AI call, no free-form generation, no renderer-specific\n// (Excel/PDF/Sheets/Jira/dashboard) logic - see docs/contracts/\n// report-contract.md and the Scope Note sticky.\nconst REPORT_WORKFLOW_VERSION = '1.0';\nconst REPORT_VERSION = '1.0';\n\n// Evidence entries this project's producers (Decision Engine tiers,\n// the Decision Agent prompt's Rule 4) render as 'field: value' - see\n// 05-decision-orchestrator.json's Ground Evidence FIELD_VALUE_PATTERN.\n// Used only to pick out the single most relevant entry for\n// actual_result; evidence_summary below always uses the full set.\nconst FIELD_VALUE_PATTERN = /^([a-zA-Z_][\\w.]*)\\s*:\\s*(.*)$/;\nconst ACTUAL_RESULT_FIELDS = ['actual_status', 'transport.status', 'status_code'];\n\nconst TESTER_NOTES = {\n  PASS: 'No action needed - the actual result satisfied the expected result.',\n  FAIL: 'Investigate this failure - the actual result contradicted the expected result.',\n  BLOCKED: 'No response was received for this test case. Re-run once the target API/environment is reachable; this is not a statement about the API under test.',\n  MANUAL_REVIEW: 'Requires manual review before this verdict is treated as final - confidence fell below the trust threshold, evidence was insufficient, or a hallucination guard rejected part of the automated judgment.'\n};\n\nfunction findActualResult(evidence) {\n  for (const raw of evidence) {\n    const match = FIELD_VALUE_PATTERN.exec(raw.trim());\n    if (match && ACTUAL_RESULT_FIELDS.includes(match[1])) {\n      return raw;\n    }\n  }\n  // No recognizable field/value entry - fall back to the first evidence\n  // entry rather than inventing a summary; still real, structured\n  // evidence the verdict already rested on.\n  return evidence[0];\n}\n\nfunction renderDecisionBasis(decisionBasis) {\n  let rendered = `tier: ${decisionBasis.tier}`;\n  if (decisionBasis.model_version) {\n    rendered += `, model: ${decisionBasis.model_version}`;\n  }\n  if (decisionBasis.prompt_version) {\n    rendered += `, prompt: ${decisionBasis.prompt_version}`;\n  }\n  return rendered;\n}\n\nfunction renderExecutionNotes(decisionBasis, decidedAt) {\n  const basisText = decisionBasis.tier === 'ai_assisted'\n    ? `an AI-assisted judgment (model: ${decisionBasis.model_version}, prompt: ${decisionBasis.prompt_version})`\n    : `a deterministic rule (${decisionBasis.tier}), no AI call made`;\n  return `Decision reached at ${decidedAt} via ${basisText}.`;\n}\n\nconst item = $input.item.json;\nconst verdict = item.verdict;\nconst decisionBasis = item.decision_basis;\nconst decidedAt = item.metadata.decided_at;\n\nreturn { json: {\n  workflow_version: REPORT_WORKFLOW_VERSION,\n  report_version: REPORT_VERSION,\n  test_case: item.test_case,\n  decision: {\n    request_id: item.request_id,\n    response_id: item.response_id,\n    verdict,\n    decision_basis: decisionBasis,\n    decided_at: decidedAt\n  },\n  report: {\n    status: verdict.status,\n    actual_result: findActualResult(verdict.evidence),\n    reasoning: verdict.reasoning,\n    tester_notes: TESTER_NOTES[verdict.status],\n    execution_notes: renderExecutionNotes(decisionBasis, decidedAt),\n    confidence: verdict.confidence,\n    decision_basis: renderDecisionBasis(decisionBasis),\n    manual_review: verdict.status === 'MANUAL_REVIEW',\n    evidence_summary: verdict.evidence.join('; '),\n    execution_time: decidedAt,\n    metadata: {\n      documented_at: new Date().toISOString(),\n      source_workflow: '05-decision-orchestrator',\n      next_workflow: null\n    }\n  }\n} };"
+      }
+    },
+    {
+      "id": "renderer-handoff",
+      "name": "Report Renderers",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [740, 260],
+      "notes": "Hand-off boundary to future downstream renderers (Excel Writer - Task 5.1, PDF, Google Sheets, dashboards, Jira Agent) - none built yet. Every renderer consumes the same Report Contract (docs/contracts/report-contract.md) or an ERROR payload (docs/contracts/error-payload.md); this workflow has no opinion on, or knowledge of, any specific output format.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Decision Contract Trigger": {
+      "main": [
+        [
+          { "node": "Validate Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Contract": {
+      "main": [
+        [
+          { "node": "Route Validation Errors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route Validation Errors": {
+      "main": [
+        [
+          { "node": "Report Renderers", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build Report Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Report Contract": {
+      "main": [
+        [
+          { "node": "Report Renderers", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
