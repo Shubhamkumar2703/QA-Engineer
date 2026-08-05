@@ -412,3 +412,62 @@ no tier funnel, no branching beyond the standard ERROR-passthrough IF.
   values across all four verdict statuses, byte-for-byte `test_case`/
   `decision` preservation, and 8 malformed-Decision-Contract rejections.
   See `PROJECT_STATUS.md`'s "Verification notes" for the full list.
+
+## Task 5.1 (Excel Writer) - things worth knowing
+
+`06.1-excel-writer.json` is the first workflow in this project built as a
+**renderer** rather than a pipeline stage - it consumes the Report
+Contract and produces no contract of its own, just a side effect (an
+updated file) plus a small internal confirmation record. It's also the
+first workflow shaped by mid-task feedback that arrived as its own design
+document rather than a correction: the "One Small Improvement" request
+asked for a generalized Report Contract → Renderer Adapter → COLUMN_MAP →
+Renderer pattern, given *while* Task 5.1's original (simpler) brief was
+still being read - worth remembering that this project's task briefs can
+arrive in two parts like that, and the second part isn't optional
+polish, it's the actual target shape.
+
+- **The four-stage split (`Excel Adapter` → `Apply Column Map` →
+  read/locate/merge → write) is doing real isolation work, not just
+  matching a diagram.** `Excel Adapter` is the *only* node in the whole
+  workflow that reads `report.*`/`test_case.*` field names - everything
+  after it only ever sees the 9 canonical renderer field names. That
+  means a hypothetical Google Sheets renderer's own `Sheets Adapter` node
+  would be *byte-for-byte identical code* to `Excel Adapter` (both derive
+  the same 9 fields from the same Report Contract) - only `Apply Column
+  Map` (target column identifiers) and everything after it (xlsx vs.
+  Sheets API) would need to differ. That's the concrete, provable form of
+  "Report Contract never changes to support a new renderer," not just an
+  architectural aspiration.
+- **"Never write Test ID/Description/Steps/Expected Result" is enforced
+  structurally, not by a check.** `COLUMN_MAP` in `Apply Column Map`
+  simply never contains those four canonical keys, so `__updates` (the
+  object that gets spread onto the matched row) can never carry those
+  header names - there's no `if (column !== 'Test ID')` guard anywhere
+  because there's nothing to guard against. This is the same pattern
+  `Prompt Builder` in `05-decision-orchestrator.json` uses for its
+  evidence allow-list (Task 4.3) - keep the forbidden thing structurally
+  absent rather than filtered out.
+- **Read-modify-write instead of append-only was a deliberate rejection
+  of the simpler option.** n8n's `spreadsheetFile` `toFile` operation
+  will happily write whatever items reach it as a brand-new file; the
+  laziest implementation would have been "append a row with just the
+  renderer-owned columns filled in" and let the workbook accumulate
+  duplicate/partial rows over reruns. That would have failed the brief's
+  explicit "locate the target row" and idempotency requirements the
+  moment the same test case was reported twice (a re-run, a retry
+  upstream) - so `Locate & Merge Row` always operates over the *complete*
+  existing row set, and `Row Located?` treats "no match" as a hard error
+  (`TARGET_ROW_NOT_FOUND`) rather than silently falling back to append.
+- **Verified with a script harness against a synthetic in-memory
+  workbook, not a real xlsx file.** `n8n-nodes-base.readWriteFile` and
+  `n8n-nodes-base.spreadsheetFile` are native nodes with no custom JS to
+  extract (same limitation this project has always had for native
+  nodes - Task 3.2's HTTP Executor worked around it by hitting a real
+  target, httpbin.org, directly; there was no equivalent "real target" to
+  hit here without a live n8n + a real file on disk). 113/113 checks
+  passed, including a genuine idempotency test: running the same Report
+  Contract through the extracted pipeline twice, feeding the second run's
+  workbook input from the first run's output, and asserting the final row
+  set is byte-for-byte identical both times - not just "no crash on
+  rerun," an actual convergence check.

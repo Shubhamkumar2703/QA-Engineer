@@ -1,0 +1,413 @@
+{
+  "name": "06.1 - Excel Writer",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -420],
+      "parameters": {
+        "width": 520,
+        "height": 380,
+        "content": "## Milestone 1 - Task 5.1: Excel Writer\n\nConsumes the Report Contract produced by 06-documentation-agent (docs/contracts/report-contract.md) and updates one row of an existing QA Excel workbook. A pure renderer: it never inspects a Decision Contract directly, never calls AI, never judges pass/fail, and never modifies the Report Contract it receives - it only reads from it.\n\nUpdates renderer-owned columns only (Status, Actual Result, Notes, Tester Notes, Confidence, Decision Basis, Manual Review, Execution Date, Evidence Summary). Test ID, Description, Steps, and Expected Result - the original test definition - are never written by this workflow; they are preserved by construction (see 'Locate & Merge Row').\n\nNo new field is added to the Report Contract and no change is made to 06-documentation-agent.json - this workflow only reads what that contract already provides."
+      }
+    },
+    {
+      "id": "sticky-architecture-note",
+      "name": "Architecture Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, -420],
+      "parameters": {
+        "width": 620,
+        "height": 380,
+        "content": "## Renderer architecture (Task 5.1)\n\nEvery renderer - this one and every future one (Google Sheets, PDF, dashboards) - follows the same four-stage shape, so the Report Contract never has to know which renderer is reading it:\n\n```\nReport Contract\n      |\n      v\nRenderer Adapter   <- 'Excel Adapter' below: Report Contract fields\n      |                 only, renderer-agnostic canonical names\n      v\nCOLUMN_MAP         <- 'Apply Column Map' below: canonical names\n      |                 -> this renderer's real column headers\n      v\nRenderer           <- everything from 'Read Workbook File' on:\n                        xlsx-specific, owns the actual write\n```\n\nA future Sheets Adapter would produce the exact same canonical field object 'Excel Adapter' does (both derive from the same Report Contract fields) - only 'Apply Column Map' (target column headers) and everything after it (xlsx vs Sheets API) would differ. Building a second renderer never requires touching 06-documentation-agent.json or docs/contracts/report-contract.md."
+      }
+    },
+    {
+      "id": "sticky-design-note",
+      "name": "Design Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1140, -420],
+      "parameters": {
+        "width": 560,
+        "height": 380,
+        "content": "## Design notes\n\n- REPORT_FILE_PATH ('/data/reports/qa-report.xlsx') is a fixed literal, defined identically in 'Read Workbook File' and 'Write Workbook File' (n8n Code nodes can't share constants with native nodes' parameters - same manual-sync convention docs/workflow-standards.md already accepts for COLUMN_MAP/AGENT_ROUTES). Never derived from item data, so there is no path-traversal surface from a malformed Report Contract.\n- Read-modify-write, not append: every row from the existing workbook is read, exactly one row is updated in place, and the full row set (unchanged rows included) is written back - this is what keeps every other test's row, and every non-renderer-owned column on the target row, byte-for-byte untouched.\n- Idempotent by construction: re-running with the same Report Contract locates the same row and overlays the same 9 values again - no new row is ever appended, and a converged value stays converged.\n- No retry logic on 'Read Workbook File' / 'Write Workbook File' failures - same 'no retry, no classification' convention as every prior workflow's native-node error handling (e.g. 05's 'Claude' -> 'Build AI Service Error')."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "Report Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 60],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-contract-node",
+      "name": "Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 60],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Confirms the incoming item is a well-formed Report Contract\n// (docs/contracts/report-contract.md) before any renderer logic runs.\n// This is the only node that validates the contract's envelope shape -\n// every node after it trusts this completely.\nconst STAGE = 'excel_writer';\nconst WORKFLOW_VERSION = '1.0';\nconst VALID_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'MANUAL_REVIEW'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\n// ERROR payloads produced upstream (Documentation Agent, or anything\n// earlier) are not Report Contracts and must not be re-validated as\n// one - pass them through unchanged, same convention as every prior\n// workflow.\nif (item && item.status === 'ERROR') {\n  return { json: item };\n}\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nconst requiredFields = ['workflow_version', 'report_version', 'test_case', 'decision', 'report'];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    `Report Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields }\n  ) };\n}\n\nif (typeof item.test_case !== 'object' || item.test_case === null || Array.isArray(item.test_case) ||\n    typeof item.test_case.test_id !== 'string' || item.test_case.test_id.trim() === '') {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract test_case must be an object with a non-empty test_id',\n    {}\n  ) };\n}\n\nconst r = item.report;\nif (typeof r !== 'object' || r === null || Array.isArray(r) ||\n    !VALID_STATUSES.includes(r.status) ||\n    typeof r.actual_result !== 'string' ||\n    typeof r.reasoning !== 'string' ||\n    typeof r.tester_notes !== 'string' ||\n    typeof r.confidence !== 'number' || r.confidence < 0 || r.confidence > 1 ||\n    typeof r.decision_basis !== 'string' ||\n    typeof r.manual_review !== 'boolean' ||\n    typeof r.evidence_summary !== 'string' ||\n    typeof r.execution_time !== 'string') {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract report object is missing or has an invalid status/actual_result/reasoning/tester_notes/confidence/decision_basis/manual_review/evidence_summary/execution_time',\n    { test_id: item.test_case.test_id }\n  ) };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "route-validation-errors-node",
+      "name": "Route Validation Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 60],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "excel-adapter-node",
+      "name": "Excel Adapter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 160],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Excel Adapter - Report Contract stage of the renderer pattern (see\n// Architecture Note sticky). The only node in this workflow that reads\n// `report.*` / `test_case.*` field names directly - everything after\n// this node only ever sees the canonical, renderer-agnostic field names\n// below. This is what a future Sheets/PDF adapter would reproduce\n// unchanged; only 'Apply Column Map' and everything after it differs\n// per renderer.\n//\n// Every value here is either carried straight through or a direct\n// rename - never invented, never re-derived. 'notes' maps to\n// report.reasoning (the AI/deterministic explanation of the verdict -\n// the original Excel MCP schema's 'Notes' column per\n// docs/architecture/milestone-1.md section 4/6), kept distinct from\n// 'tester_notes' (report.tester_notes - the fixed per-status action\n// guidance a human tester reads).\nconst item = $input.item.json;\nconst report = item.report;\nconst testCase = item.test_case;\n\nreturn { json: {\n  test_id: testCase.test_id,\n  fields: {\n    status: report.status,\n    actual_result: report.actual_result,\n    notes: report.reasoning,\n    tester_notes: report.tester_notes,\n    confidence: report.confidence,\n    decision_basis: report.decision_basis,\n    manual_review: report.manual_review,\n    execution_date: report.execution_time,\n    evidence_summary: report.evidence_summary\n  }\n} };"
+      }
+    },
+    {
+      "id": "apply-column-map-node",
+      "name": "Apply Column Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 160],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Apply Column Map - COLUMN_MAP stage of the renderer pattern (see\n// Architecture Note sticky). The single source of truth for this\n// renderer's real Excel column headers, defined once, here - per\n// docs/workflow-standards.md's column-mapping rule, no other node in\n// this workflow references a raw header string. Renderer-owned columns\n// only: Test ID is the lookup key, never part of __updates, so it can\n// never be overwritten downstream (satisfies 'never update Test ID,\n// Description, Steps, Expected Result' - those simply never appear in\n// this map at all).\nconst COLUMN_MAP = {\n  test_id: 'Test ID',\n  status: 'Status',\n  actual_result: 'Actual Result',\n  notes: 'Notes',\n  tester_notes: 'Tester Notes',\n  confidence: 'Confidence',\n  decision_basis: 'Decision Basis',\n  manual_review: 'Manual Review',\n  execution_date: 'Execution Date',\n  evidence_summary: 'Evidence Summary'\n};\n\nconst adapterOutput = $input.item.json;\n\nconst updates = {};\nfor (const [canonicalKey, header] of Object.entries(COLUMN_MAP)) {\n  if (canonicalKey === 'test_id') continue;\n  updates[header] = adapterOutput.fields[canonicalKey];\n}\n\nreturn { json: {\n  __lookup_header: COLUMN_MAP.test_id,\n  __lookup_value: adapterOutput.test_id,\n  __updates: updates\n} };"
+      }
+    },
+    {
+      "id": "read-workbook-file-node",
+      "name": "Read Workbook File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [960, 160],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/data/reports/qa-report.xlsx",
+        "options": {}
+      }
+    },
+    {
+      "id": "build-workbook-read-error-node",
+      "name": "Build Workbook Read Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 380],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Handles 'Read Workbook File''s error output (file missing, locked, or\n// otherwise unreadable - docs/architecture/milestone-1.md section 4's\n// documented Excel MCP failure mode). Deliberately a single generic\n// code, not a classifier - same 'no retry, no classification' rule as\n// every prior workflow's native-node error handling.\nconst STAGE = 'excel_writer';\nconst WORKFLOW_VERSION = '1.0';\nconst REPORT_FILE_PATH = '/data/reports/qa-report.xlsx';\n\nconst mapping = $('Apply Column Map').first().json;\nconst rawError = $input.item.json;\nconst message = String(rawError.error || rawError.message || JSON.stringify(rawError));\n\nreturn { json: {\n  status: 'ERROR',\n  stage: STAGE,\n  code: 'REPORT_FILE_UNAVAILABLE',\n  message: `Could not read the report workbook at \"${REPORT_FILE_PATH}\": ${message}`,\n  details: { file_path: REPORT_FILE_PATH, test_id: mapping.__lookup_value },\n  timestamp: new Date().toISOString(),\n  workflow_version: WORKFLOW_VERSION\n} };"
+      }
+    },
+    {
+      "id": "parse-workbook-rows-node",
+      "name": "Parse Workbook Rows",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [1180, 60],
+      "parameters": {
+        "operation": "fromFile",
+        "binaryPropertyName": "data",
+        "options": {
+          "headerRow": true
+        }
+      }
+    },
+    {
+      "id": "locate-merge-row-node",
+      "name": "Locate & Merge Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 60],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Locate & Merge Row - the renderer's read-modify-write core. Finds the\n// one workbook row whose lookup column matches this Report Contract's\n// test_id, and overlays ONLY 'Apply Column Map''s __updates onto that\n// row - every other key already on the row object (Test ID,\n// Description, Steps, Expected Result, and any other column this\n// workbook happens to have) is preserved by the object spread below,\n// untouched, because __updates structurally never contains those keys.\n// Every non-matching row is returned completely unchanged. This node\n// makes no judgment about the verdict - it only locates and merges data\n// that 'Excel Adapter'/'Apply Column Map' already finalized.\nconst mapping = $('Apply Column Map').first().json;\nconst rows = $input.all().map((i) => i.json);\n\nlet matchedIndex = -1;\nfor (let i = 0; i < rows.length; i++) {\n  if (String(rows[i][mapping.__lookup_header]) === String(mapping.__lookup_value)) {\n    matchedIndex = i;\n    break;\n  }\n}\n\nif (matchedIndex === -1) {\n  return [{ json: { __status: 'NOT_FOUND', test_id: mapping.__lookup_value } }];\n}\n\nconst updatedRows = rows.map((row, i) => (i === matchedIndex ? { ...row, ...mapping.__updates } : row));\n\nreturn [{ json: { __status: 'MATCHED', test_id: mapping.__lookup_value, rows: updatedRows } }];"
+      }
+    },
+    {
+      "id": "row-located-node",
+      "name": "Row Located?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1620, 60],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-matched",
+              "leftValue": "={{ $json.__status }}",
+              "rightValue": "MATCHED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "build-row-not-found-error-node",
+      "name": "Build Target Row Not Found Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 220],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// The Report Contract's test_id has no matching row in the workbook -\n// this workflow only updates an existing row (per Task 5.1's brief), it\n// never appends one. Surfaced loudly rather than silently skipped or\n// silently appended, same 'fail loudly' rule as every prior workflow.\nconst STAGE = 'excel_writer';\nconst WORKFLOW_VERSION = '1.0';\n\nconst item = $input.item.json;\n\nreturn { json: {\n  status: 'ERROR',\n  stage: STAGE,\n  code: 'TARGET_ROW_NOT_FOUND',\n  message: `No row found in the report workbook for Test ID \"${item.test_id}\"`,\n  details: { test_id: item.test_id },\n  timestamp: new Date().toISOString(),\n  workflow_version: WORKFLOW_VERSION\n} };"
+      }
+    },
+    {
+      "id": "expand-rows-for-write-node",
+      "name": "Expand Rows For Write",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 60],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Turns the single { rows: [...] } item 'Locate & Merge Row' produced\n// back into one n8n item per row, the shape 'Write Workbook Rows'\n// (spreadsheetFile, operation 'toFile') needs to render every row -\n// unchanged and updated alike - back into the workbook.\nconst item = $input.first().json;\nreturn item.rows.map((row) => ({ json: row }));"
+      }
+    },
+    {
+      "id": "write-workbook-rows-node",
+      "name": "Write Workbook Rows",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [2060, 60],
+      "parameters": {
+        "operation": "toFile",
+        "fileFormat": "xlsx",
+        "binaryPropertyName": "data",
+        "options": {
+          "headerRow": true
+        }
+      }
+    },
+    {
+      "id": "write-workbook-file-node",
+      "name": "Write Workbook File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [2280, 60],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "write",
+        "fileName": "/data/reports/qa-report.xlsx",
+        "dataPropertyName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "build-workbook-write-error-node",
+      "name": "Build Workbook Write Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2280, 280],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Handles 'Write Workbook File''s error output (file locked, disk full,\n// permissions) - docs/architecture/milestone-1.md section 4's other\n// documented Excel MCP failure mode. Same 'no retry, no classification'\n// rule as every other native-node error handler in this workflow.\nconst STAGE = 'excel_writer';\nconst WORKFLOW_VERSION = '1.0';\nconst REPORT_FILE_PATH = '/data/reports/qa-report.xlsx';\n\nconst mapping = $('Apply Column Map').first().json;\nconst rawError = $input.item.json;\nconst message = String(rawError.error || rawError.message || JSON.stringify(rawError));\n\nreturn { json: {\n  status: 'ERROR',\n  stage: STAGE,\n  code: 'WORKBOOK_WRITE_FAILED',\n  message: `Could not write the report workbook at \"${REPORT_FILE_PATH}\": ${message}`,\n  details: { file_path: REPORT_FILE_PATH, test_id: mapping.__lookup_value },\n  timestamp: new Date().toISOString(),\n  workflow_version: WORKFLOW_VERSION\n} };"
+      }
+    },
+    {
+      "id": "build-write-confirmation-node",
+      "name": "Build Write Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 60],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// A deterministic confirmation object for this run - not a new\n// contract, just a record of what this renderer actually wrote, for\n// logging/auditing. Nothing here is invented: columns_updated is read\n// directly from the same __updates object that was written to the\n// workbook.\nconst REPORT_FILE_PATH = '/data/reports/qa-report.xlsx';\nconst mapping = $('Apply Column Map').first().json;\n\nreturn { json: {\n  status: 'WRITTEN',\n  test_id: mapping.__lookup_value,\n  file_path: REPORT_FILE_PATH,\n  columns_updated: Object.keys(mapping.__updates),\n  written_at: new Date().toISOString()\n} };"
+      }
+    },
+    {
+      "id": "renderer-complete-node",
+      "name": "Renderer Complete",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2720, 60],
+      "notes": "Terminal node. Every path - a successful write confirmation, an upstream/validation ERROR payload, a target-row-not-found ERROR, or a workbook read/write ERROR - converges here. This workflow has no consumer of its own; it is the last stage for this test case's renderer.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Report Contract Trigger": {
+      "main": [
+        [
+          { "node": "Validate Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Contract": {
+      "main": [
+        [
+          { "node": "Route Validation Errors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route Validation Errors": {
+      "main": [
+        [
+          { "node": "Renderer Complete", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Excel Adapter", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Excel Adapter": {
+      "main": [
+        [
+          { "node": "Apply Column Map", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Apply Column Map": {
+      "main": [
+        [
+          { "node": "Read Workbook File", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Workbook File": {
+      "main": [
+        [
+          { "node": "Parse Workbook Rows", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build Workbook Read Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Workbook Read Error": {
+      "main": [
+        [
+          { "node": "Renderer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Workbook Rows": {
+      "main": [
+        [
+          { "node": "Locate & Merge Row", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Locate & Merge Row": {
+      "main": [
+        [
+          { "node": "Row Located?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Row Located?": {
+      "main": [
+        [
+          { "node": "Expand Rows For Write", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build Target Row Not Found Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Target Row Not Found Error": {
+      "main": [
+        [
+          { "node": "Renderer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Expand Rows For Write": {
+      "main": [
+        [
+          { "node": "Write Workbook Rows", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Write Workbook Rows": {
+      "main": [
+        [
+          { "node": "Write Workbook File", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Write Workbook File": {
+      "main": [
+        [
+          { "node": "Build Write Confirmation", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build Workbook Write Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Write Confirmation": {
+      "main": [
+        [
+          { "node": "Renderer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Workbook Write Error": {
+      "main": [
+        [
+          { "node": "Renderer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

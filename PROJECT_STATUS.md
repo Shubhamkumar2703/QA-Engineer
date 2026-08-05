@@ -21,7 +21,7 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.4 - Confidence & Trust Layer | `05-decision-orchestrator.json` (same file, extended) | Done. Replaced the single "Validate Decision Contract" node with "Validate AI Response Shape" -> "Ground Evidence" -> "Apply Trust Rules": structured field/value evidence grounding (not natural-language comparison), deterministic confidence capping (no longer passed through raw), hallucination detection (forces `MANUAL_REVIEW`), and a new `UNGROUNDED_VERDICT` error for internally-inconsistent verdicts. Script harness: 82/82 checks, no regression to Tier 0/1 or contract shape. See "Verification notes" below. |
 | Task 4.5 - Verification, Benchmark & Calibration | `docs/reviews/task-4.5-verification.md` | Done. No workflow changes required - the shipped `05-decision-orchestrator.json` was correct against every real test. First real (not mocked) LLM verification in this project: 5 live calls to a local Ollama server (`llama3:latest`), which surfaced a real malformed-JSON response and a real "confidently wrong despite fully-grounded evidence" case. **Milestone 1 Decision Engine marked production-ready for local testing** (Ollama), with real Anthropic API + live n8n execution still unverified. See "Verification notes" below and the full report. |
 | Task 5 - Documentation Agent | `06-documentation-agent.json` | Built. Consumes only the Decision Contract and produces the new Report Contract (`docs/contracts/report-contract.md`) - formatting only, no AI call, no Excel/PDF/Sheets/dashboard/Jira-specific logic anywhere in this file. Script harness: 61/61 checks. See "Verification notes" below. |
-| Task 5.1 - Excel Writer | (not yet built) | Not started |
+| Task 5.1 - Excel Writer | `06.1-excel-writer.json` | Built. First Report Contract renderer, follows the new Renderer Adapter → COLUMN_MAP → Renderer pattern (`docs/renderers/excel-renderer.md`). Consumes only the Report Contract - never a Decision Contract, never AI. Updates only the 9 renderer-owned columns on the matching row; `Test ID`/`Description`/`Steps`/`Expected Result` are never referenced in its column map, so they can't be written by construction. Script harness: 113/113 checks. See "Verification notes" below. |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
 ## Verification notes
@@ -153,43 +153,73 @@ Documentation Agent's job is formatting a verdict that was already
 decided, not deciding anything. No Excel, Google Sheets, PDF, dashboard,
 or Jira reference anywhere in the workflow or the contract it produces -
 those are downstream renderer workflows (Task 5.1+), a deliberate design
-decision so the same Report Contract works for all of them. Script
-harness: 61/61 checks (PASS/FAIL/BLOCKED/MANUAL_REVIEW across both
-deterministic and AI-assisted `decision_basis.tier` values, upstream
-ERROR passthrough, 8 malformed-input rejections). See "Verification
-notes" below. Not yet imported/run inside a live n8n instance, same
-caveat as every prior workflow.
+decision so the same Report Contract works for all of them. Same
+script-harness approach as every prior task - `Validate Contract` and
+`Build Report Contract` extracted from the committed JSON and chained as
+n8n would connect them. 61/61 checks passed: a deterministic-tier `PASS`
+and an `ai_assisted`-tier `FAIL`/`BLOCKED`/`MANUAL_REVIEW` each verified
+for `test_case`/`decision` preservation (byte-for-byte, via
+`JSON.stringify` equality against the source Decision Contract), correct
+`report.actual_result` extraction across all three evidence-rendering
+conventions the pipeline currently produces (`status_code: expected X,
+actual Y` from Tier 1, `transport.status: X` from Tier 0, `actual_status:
+X` from the AI path), `report.manual_review` set correctly, the four
+fixed `tester_notes` templates, and that no renderer name
+(excel/pdf/sheets/jira/dashboard) appears anywhere in a produced Report
+Contract. Plus: an upstream ERROR payload passes through `Validate
+Contract` unchanged, and 8 malformed-Decision-Contract cases (missing
+`verdict`, invalid status enum, out-of-range confidence, empty evidence,
+missing `decision_basis.tier`, missing `metadata.decided_at`, non-object
+input, array input) all produce `INVALID_DECISION_CONTRACT`. Not yet
+imported/run inside a live n8n instance, same caveat as every prior
+workflow.
 
-**Task 5 (Documentation Agent):** Same script-harness approach as every
-prior task - `Validate Contract` and `Build Report Contract` extracted
-from the committed JSON and chained as n8n would connect them. 61/61
-checks passed: a deterministic-tier `PASS` and an `ai_assisted`-tier
-`FAIL`/`BLOCKED`/`MANUAL_REVIEW` each verified for `test_case`/`decision`
-preservation (byte-for-byte, via `JSON.stringify` equality against the
-source Decision Contract), correct `report.actual_result` extraction
-across all three evidence-rendering conventions the pipeline currently
-produces (`status_code: expected X, actual Y` from Tier 1,
-`transport.status: X` from Tier 0, `actual_status: X` from the AI path),
-`report.manual_review` set correctly, the four fixed `tester_notes`
-templates, and that no renderer name (excel/pdf/sheets/jira/dashboard)
-appears anywhere in a produced Report Contract. Plus: an upstream ERROR
-payload passes through `Validate Contract` unchanged, and 8 malformed-
-Decision-Contract cases (missing `verdict`, invalid status enum,
-out-of-range confidence, empty evidence, missing `decision_basis.tier`,
-missing `metadata.decided_at`, non-object input, array input) all produce
-`INVALID_DECISION_CONTRACT`. Same live-n8n verification caveat as every
-prior task applies - no running n8n instance was available in this
-environment.
+**Task 5.1 (Excel Writer):** `06.1-excel-writer.json` is the first
+renderer to consume the Report Contract, built around the new four-stage
+Renderer Adapter → COLUMN_MAP → Renderer pattern documented in
+`docs/renderers/excel-renderer.md`. `Excel Adapter` reads `report.*`/
+`test_case.*` (the only node that does); `Apply Column Map` is the single
+source of truth for the workbook's real column headers; `Locate & Merge
+Row` does a read-modify-write over the whole workbook (every row read,
+exactly one row updated, the full set written back), so every other row
+and every non-renderer-owned column on the target row is preserved by
+construction, not by a runtime check. Same script-harness approach as
+every prior task (no live n8n available) - `Validate Contract`, `Excel
+Adapter`, `Apply Column Map`, `Locate & Merge Row`, `Expand Rows For
+Write`, `Build Write Confirmation`, and the two error-builder nodes
+extracted from the committed JSON and chained as n8n would connect them,
+against a synthetic 3-row workbook standing in for a parsed xlsx file
+(the native `readWriteFile`/`spreadsheetFile` nodes have no custom JS to
+extract - the same substitution this project's harnesses have always used
+for native nodes, e.g. 05's `Claude` HTTP node). 113/113 checks passed:
+all four verdict statuses (`PASS`/`FAIL`/`BLOCKED`/`MANUAL_REVIEW`)
+correctly update all 9 renderer-owned columns on the correct row while
+leaving `Test ID`/`Description`/`Steps`/`Expected Result` and the two
+non-target rows byte-for-byte unchanged; running the same Report Contract
+through the pipeline twice in a row (second run reading the first run's
+output) produces byte-for-byte identical final rows (idempotency); an
+upstream ERROR payload passes through unchanged; 8 malformed-Report-
+Contract cases all produce `INVALID_REPORT_CONTRACT`; and a `test_id`
+with no matching row produces `TARGET_ROW_NOT_FOUND` rather than
+appending a new row. Not yet imported/run inside a live n8n instance, and
+the actual xlsx read/write behavior of `n8n-nodes-base.readWriteFile` /
+`n8n-nodes-base.spreadsheetFile` is unverified against a real file - only
+this workflow's own Code-node logic was exercised.
 
 ## Next up
 
-Task 5.1 (Excel Writer) - the first Report Contract renderer. Before it:
-this task deliberately left the Excel Writer entirely unbuilt (Milestone
-1 scope for Task 5 was the Report Contract and its producer only, not any
-renderer), so Task 5.1 starts from a clean, format-independent contract
-rather than retrofitting one out of Excel-specific fields. Also still
-open from Task 4: don't treat high AI confidence as a correctness
-guarantee (a real false-positive was demonstrated at 0.95 in Task 4.5);
-a real n8n + real Anthropic credential verification pass remains the
-largest unclosed gap across the whole pipeline, Documentation Agent
-included.
+Task 5.2 - a second renderer (Google Sheets is the natural next
+candidate, per the "One Small Improvement" architecture note) to prove
+the Renderer Adapter → COLUMN_MAP → Renderer pattern generalizes in
+practice, not just in design. Before it: `docs/contracts/error-payload.md`
+doesn't yet list Task 5.1's four `excel_writer` error codes (documented
+only in `docs/renderers/excel-renderer.md` for now - see that document's
+"Error codes" section) - worth folding into the shared table the next
+time that document is touched, per `docs/workflow-standards.md`'s "every
+new code gets added in the same change that introduces it" rule, which
+this task's deliverable list didn't include. Also still open from Task 4:
+don't treat high AI confidence as a correctness guarantee (a real
+false-positive was demonstrated at 0.95 in Task 4.5); a real n8n + real
+Anthropic credential verification pass, and now also a real xlsx
+read/write verification pass, remain the largest unclosed gaps across the
+whole pipeline.
