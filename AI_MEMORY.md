@@ -296,3 +296,63 @@ transport failure, normalizer-level error), not just the happy path.
   policy up in one configurable, named block - it does not calibrate
   the numbers against real data. Still true after four tasks: nothing
   has run against a live n8n instance or a real Anthropic API call.
+
+## Task 4.5 (Verification, Benchmark & Calibration) - things worth knowing
+
+Full report: `docs/reviews/task-4.5-verification.md`. This is the first
+task in the whole Decision Engine chain that tested the AI path against
+a **real** model instead of a scripted response - Ollama was actually
+running locally (`llama3:latest`, confirmed via `curl localhost:11434`),
+so this genuinely happened, it isn't simulated. No Anthropic credential
+was available, so the Claude path is still only ever verified against
+mocks - that gap is now the single largest one left across the whole
+project.
+
+- **`llama3:latest` has no native tool-calling support** ("does not
+  support tools" - a live API error, not an assumption). The benchmark's
+  Ollama adapter therefore uses prompt-instructed JSON (ask for raw JSON
+  in the system prompt, parse the model's text) instead of Claude's
+  forced `tool_choice`. This is a real, structural capability gap
+  between providers, not a Decision Engine limitation - Claude's
+  structured output is *enforced*; a non-tool-calling local model's is
+  *requested*, and requesting doesn't always work (see next point).
+- **Two real findings that were previously only hypothetical:** (1) a
+  genuinely malformed/truncated JSON response from the real model,
+  correctly rejected by `Validate AI Response Shape` - the
+  malformed-response path now has a real reproduction, not just a
+  synthetic test fixture. (2) A response where every evidence entry was
+  real and correctly grounded (ratio 1.0), but the verdict (`PASS`)
+  directly contradicted the model's own `reasoning` field, which
+  describes a clear mismatch. The Trust Layer's grounding check is
+  purely structural (does this cited fact trace to the real data) and
+  has no mechanism to catch "the conclusion doesn't follow from the
+  facts" - this is a real, demonstrated gap in what grounding validation
+  can and can't catch, worth remembering before anyone assumes a
+  fully-grounded, capped-confidence verdict is trustworthy just because
+  it passed the Trust Layer.
+- **The few-shot examples in `prompts/decision-agent/v1.md` are doing
+  real work, not decoration.** An early exploratory probe using the
+  prompt's rules *without* the three worked examples produced evidence
+  entries like `"field: description"` - not even attempting the
+  `field: value` convention. With the full prompt (rules + all three
+  examples, exactly as shipped), all 5 real benchmark calls produced
+  correctly-formatted, 100%-grounded evidence. If `prompts/decision-
+  agent/v1.md` is ever trimmed for length, the examples are the load-
+  bearing part for at least this model - cutting them is a real risk,
+  not a safe simplification.
+- **Model portability seam, precisely located:** `Build Claude API
+  Request` (builds Anthropic's specific tool-calling request shape) and
+  `Validate AI Response Shape` (parses Anthropic's specific
+  `content[].type === 'tool_use'` response location) are the only two
+  nodes that assume Anthropic's API shape. `Ground Evidence` and `Apply
+  Trust Rules` already operate only on the normalized `__raw_verdict`
+  shape and were proven (not just designed) to be model-agnostic in this
+  task - the same unmodified code processed real Ollama output
+  correctly. Adding a second provider for real would mean a second
+  `Build <Provider> API Request` + `Validate <Provider> AI Response
+  Shape` pair, normalizing into the same `__raw_verdict` shape -
+  additive, no redesign, but not built here (out of scope).
+- **No workflow changes were needed.** Every stage behaved correctly
+  against real model output on the first try - the zero-diff result
+  itself is worth recording, since it's easy to assume a "verification
+  sprint" must find something to fix.
