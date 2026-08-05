@@ -18,6 +18,7 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.1 - Decision Orchestrator | `05-decision-orchestrator.json` | Built. Tier 0/1 (deterministic) and Tier 2 (AI-assisted, response validation) logic verified with a script harness. AI call itself mocked (no live Anthropic credential in this environment) and not yet imported/run inside a live n8n instance. Deliberately does not implement confidence recalibration, grounding validation, retry logic, or AI-failure recovery - later tasks. |
 | Task 4.2 - Decision Engine (extracted Tier 0/1) | `05-decision-orchestrator.json` (same file, refactored) | Done. Tier 0 + Tier 1 + final contract assembly consolidated into a named "Decision Engine" node group, using structured evidence objects internally (rendered to strings only at final assembly - `decision-contract.md`'s shape is unchanged). Script harness: 60/60 checks, no regression to Tier 2. See "Verification notes" below. |
 | Task 4.3 - AI Evaluation (Prompt Builder) | `05-decision-orchestrator.json` (same file, extended) | Done. Split the former "Build AI Request" node into a dedicated "Prompt Builder" stage (evidence allow-list re-verification + prompt content) and "Build Claude API Request" (API-call structure only). Script harness: 68/68 checks, no regression to Tier 0/1/2. See "Verification notes" below. |
+| Task 4.4 - Confidence & Trust Layer | `05-decision-orchestrator.json` (same file, extended) | Done. Replaced the single "Validate Decision Contract" node with "Validate AI Response Shape" -> "Ground Evidence" -> "Apply Trust Rules": structured field/value evidence grounding (not natural-language comparison), deterministic confidence capping (no longer passed through raw), hallucination detection (forces `MANUAL_REVIEW`), and a new `UNGROUNDED_VERDICT` error for internally-inconsistent verdicts. Script harness: 82/82 checks, no regression to Tier 0/1 or contract shape. See "Verification notes" below. |
 | Documentation Agent | `06-documentation-agent.json` | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
@@ -99,14 +100,31 @@ confirms both are stripped before reaching the model: 68/68 passed, zero
 regression to Tier 0/1/2. Same "AI call is mocked, never run against a
 real Anthropic API" caveat as Task 4.1 still applies.
 
+**Task 4.4 (Confidence & Trust Layer):** Replaced "Validate Decision
+Contract" with three nodes - "Validate AI Response Shape" (structural
+only, tightened to reject empty evidence), "Ground Evidence" (parses
+each evidence string into a `{field, value}` token per the model's own
+documented format and resolves it against `__evidence_packet` -
+structural matching, never natural-language comparison), and "Apply
+Trust Rules" (the only node that turns grounding results into a
+decision: fully ungrounded evidence forces `MANUAL_REVIEW` regardless of
+what the model reported; partial grounding caps confidence to 0.5, which
+combined with the existing 0.7 threshold always also ends in
+`MANUAL_REVIEW`; a `PASS`/`FAIL` below a 0.3 decisive-confidence floor is
+rejected outright as the new `UNGROUNDED_VERDICT` error, since it's
+self-contradictory rather than merely uncertain). Confidence is no
+longer passed through raw even when fully grounded - capped at 0.95
+(structured expectation) or 0.75 (free-text only). Reasoning/evidence
+text is never rewritten, only status/confidence/next_action are ever
+adjusted. Re-ran the full harness plus 14 new checks: 82/82 passed, zero
+regression to Tier 0/1 or the Decision Contract's shape.
+
 ## Next up
 
-Per the Task 4 tree: 4.4 (Confidence & Hallucination Guards), 4.5
-(Decision Contract Validation) - both refinements/hardening of what 4.1-
-4.3 already built end-to-end (tier routing, the AI call with a dedicated
-prompt stage, and basic schema validation all exist now; 4.4/4.5 add
-grounding checks, retry logic, AI-failure recovery, and confidence
-recalibration on top, per their own scope). Before any of them: import
+Task 4.5 (Decision Contract Validation) - the Task 4 tree's last item,
+likely a final consistency/schema-conformance pass now that 4.1-4.4 have
+built tier routing, the AI call, prompt construction, and the trust
+layer end-to-end. Before any of them: import
 `05-decision-orchestrator.json` into a real n8n instance with a real
 Anthropic credential and run at least one Tier 2 case end-to-end -
 nothing about the actual AI call has been verified

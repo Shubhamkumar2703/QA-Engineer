@@ -240,3 +240,59 @@ transport failure, normalizer-level error), not just the happy path.
 - Same verification approach and same caveat as every prior task in this
   chain: script harness only (68/68 checks, up from 60), Claude call
   mocked - never run against a real Anthropic API or inside real n8n.
+
+## Task 4.4 (Confidence & Trust Layer) - things worth knowing
+
+- Real tension resolved here: the task said "prefer structured evidence
+  matching, do not compare natural-language strings," but "do not modify
+  Prompt Builder" meant the model's tool schema (and therefore its
+  evidence field type: array of strings) couldn't change. Resolved by
+  parsing the model's evidence strings into `{field, value}` tokens -
+  the format `prompts/decision-agent/v1.md` Rule 4 already instructs the
+  model to follow (e.g. `"expected_status: 422"`) - then resolving those
+  tokens against `__evidence_packet` by exact structural lookup. This is
+  genuinely structural (parse a known mini-format, walk a real object
+  path, compare exact values), never fuzzy/semantic text comparison,
+  even though the wire format on both sides (model output, Decision
+  Contract) is still plain strings.
+- "It does NOT change the verdict itself. It validates it" needed
+  interpretation, since the task's own bullets explicitly call for
+  overriding `status` (-> `MANUAL_REVIEW`) and `confidence` (capping) in
+  specific cases - a literal "never touches any field" reading would
+  contradict that. Landed on: this layer never performs new judgment
+  about the test outcome and never rewrites `reasoning`/`evidence` text
+  - it only ever downgrades trust in what the model already decided
+  (toward `MANUAL_REVIEW`, or via a confidence cap), never invents a
+  different opinion. A human reading a `MANUAL_REVIEW` verdict sees
+  exactly what the model wrote, just flagged as not autonomously
+  trustworthy.
+- `UNGROUNDED_VERDICT` ended up meaning something narrower than its
+  Task 4.0 anticipated-codes note implied. That note expected it for
+  general hallucination guard rejections; but the task's own explicit
+  instruction for hallucination ("evidence references missing fields,
+  impossible status codes, ... return MANUAL_REVIEW instead of trusting
+  the output") makes MANUAL_REVIEW the correct outcome for *all*
+  grounding failures, even 0% grounded - MANUAL_REVIEW is always a safe
+  fallback, so there's no scenario where a grounding failure "can't be
+  safely downgraded." What's left for `UNGROUNDED_VERDICT` is narrower:
+  a structurally-valid but self-contradictory verdict (PASS/FAIL at
+  confidence below a 0.3 "decisive-confidence floor" - the task's own
+  literal example, "PASS with confidence 0.10 -> invalid"). Kept the
+  code name for the field/message trail already established in
+  `decision-contract.md` rather than inventing a new one - documented
+  the actual scope explicitly in that doc and `error-payload.md` so a
+  future reader isn't misled by the original, broader anticipated
+  description.
+- `TRUST_CONFIG.PARTIAL_GROUNDING_CAP` (0.5) is always below
+  `CONFIDENCE_THRESHOLD` (0.7) - meaning partial grounding *always*
+  ends in `MANUAL_REVIEW` once the existing threshold gate runs, not
+  just "sometimes." This is intentional, not an oversight: one
+  mechanism (cap, then gate) satisfies both halves of the task's "cap
+  confidence OR force MANUAL_REVIEW" instruction at once, rather than
+  needing separate special-case logic for each.
+- All `TRUST_CONFIG` cap values (0.95 / 0.75 / 0.5 / 0.3 / 0.2) are the
+  same uncalibrated placeholders `decision-agent-design.md` section 3
+  and the Task 4.0 review have always flagged. This task wires the
+  policy up in one configurable, named block - it does not calibrate
+  the numbers against real data. Still true after four tasks: nothing
+  has run against a live n8n instance or a real Anthropic API call.

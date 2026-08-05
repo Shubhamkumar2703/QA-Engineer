@@ -117,15 +117,15 @@ all.
 | Code | Meaning |
 |---|---|
 | `INVALID_NORMALIZED_RESPONSE_CONTRACT` | The incoming item is neither a well-formed Normalized Response Contract (docs/contracts/normalized-response-contract.md) nor a well-formed upstream ERROR payload - missing a required field, or the item isn't even a JSON object. |
-| `INVALID_MODEL_RESPONSE` | The model's response either didn't include the forced `return_verdict` tool call, or the tool call's input failed schema validation (`status` not one of `PASS`/`FAIL`/`MANUAL_REVIEW`, `confidence` outside `0`-`1`, `reasoning` not a non-empty string, or `evidence` not an array of strings). No retry is attempted (Task 4.1 scope). |
-| `AI_SERVICE_UNAVAILABLE` | The call to the AI provider itself failed (network error, timeout, or a non-2xx from the provider's API) - as distinct from `INVALID_MODEL_RESPONSE`, where the call succeeded but its content was malformed. Deliberately a single generic code, not a classified taxonomy - AI failure recovery (retry, fallback, escalation) is out of scope for this task. |
+| `INVALID_MODEL_RESPONSE` | The model's response either didn't include the forced `return_verdict` tool call, or the tool call's input failed structural validation (`status` not one of `PASS`/`FAIL`/`MANUAL_REVIEW`, `confidence` outside `0`-`1`, `reasoning` not a non-empty string, or `evidence` not a non-empty array of non-empty strings - the non-empty requirement added in Task 4.4). No retry is attempted (Task 4.1/4.4 scope). |
+| `AI_SERVICE_UNAVAILABLE` | The call to the AI provider itself failed (network error, timeout, or a non-2xx from the provider's API) - as distinct from `INVALID_MODEL_RESPONSE`, where the call succeeded but its content was malformed. Deliberately a single generic code, not a classified taxonomy - AI failure recovery (retry, fallback, escalation) is out of scope through Task 4.4. |
+| `UNGROUNDED_VERDICT` | The model returned a structurally valid `PASS`/`FAIL` at confidence below the decisive-confidence floor (`0.3`) - internally inconsistent with its own instruction (`prompts/decision-agent/v1.md` Rule 5) to use `MANUAL_REVIEW` under genuine uncertainty. Introduced Task 4.4. Note: this is *not* used for evidence-grounding failures, which downgrade to `MANUAL_REVIEW` instead - see `docs/contracts/decision-contract.md`'s "What produces an ERROR instead" for why. |
 
 A `MANUAL_REVIEW` verdict, at any confidence level, is **not** one of
 these - it is a normal, successfully-produced Decision Contract
-(docs/contracts/decision-contract.md). The `UNGROUNDED_VERDICT` code
-anticipated in that document's error table is deliberately not shipped
-yet - it requires the grounding-check logic Task 4.4 (Confidence &
-Hallucination Guards) introduces, not this workflow.
+(docs/contracts/decision-contract.md), including when Task 4.4's
+Confidence & Trust Layer downgrades a verdict to `MANUAL_REVIEW` because
+its evidence couldn't be grounded.
 
 New workflows should add their own codes to this table when they introduce
 one, rather than reusing an existing code for a different condition.
