@@ -19,7 +19,9 @@ sub-workflow numbering (`01-ingestion` ... `07-jira-agent`).
 | Task 4.2 - Decision Engine (extracted Tier 0/1) | `05-decision-orchestrator.json` (same file, refactored) | Done. Tier 0 + Tier 1 + final contract assembly consolidated into a named "Decision Engine" node group, using structured evidence objects internally (rendered to strings only at final assembly - `decision-contract.md`'s shape is unchanged). Script harness: 60/60 checks, no regression to Tier 2. See "Verification notes" below. |
 | Task 4.3 - AI Evaluation (Prompt Builder) | `05-decision-orchestrator.json` (same file, extended) | Done. Split the former "Build AI Request" node into a dedicated "Prompt Builder" stage (evidence allow-list re-verification + prompt content) and "Build Claude API Request" (API-call structure only). Script harness: 68/68 checks, no regression to Tier 0/1/2. See "Verification notes" below. |
 | Task 4.4 - Confidence & Trust Layer | `05-decision-orchestrator.json` (same file, extended) | Done. Replaced the single "Validate Decision Contract" node with "Validate AI Response Shape" -> "Ground Evidence" -> "Apply Trust Rules": structured field/value evidence grounding (not natural-language comparison), deterministic confidence capping (no longer passed through raw), hallucination detection (forces `MANUAL_REVIEW`), and a new `UNGROUNDED_VERDICT` error for internally-inconsistent verdicts. Script harness: 82/82 checks, no regression to Tier 0/1 or contract shape. See "Verification notes" below. |
-| Documentation Agent | `06-documentation-agent.json` | Not started |
+| Task 4.5 - Verification, Benchmark & Calibration | `docs/reviews/task-4.5-verification.md` | Done. No workflow changes required - the shipped `05-decision-orchestrator.json` was correct against every real test. First real (not mocked) LLM verification in this project: 5 live calls to a local Ollama server (`llama3:latest`), which surfaced a real malformed-JSON response and a real "confidently wrong despite fully-grounded evidence" case. **Milestone 1 Decision Engine marked production-ready for local testing** (Ollama), with real Anthropic API + live n8n execution still unverified. See "Verification notes" below and the full report. |
+| Task 5 - Documentation Agent | `06-documentation-agent.json` | Built. Consumes only the Decision Contract and produces the new Report Contract (`docs/contracts/report-contract.md`) - formatting only, no AI call, no Excel/PDF/Sheets/dashboard/Jira-specific logic anywhere in this file. Script harness: 61/61 checks. See "Verification notes" below. |
+| Task 5.1 - Excel Writer | (not yet built) | Not started |
 | Jira Agent | `07-jira-agent.json` | Not started |
 
 ## Verification notes
@@ -119,13 +121,75 @@ text is never rewritten, only status/confidence/next_action are ever
 adjusted. Re-ran the full harness plus 14 new checks: 82/82 passed, zero
 regression to Tier 0/1 or the Decision Contract's shape.
 
+**Task 4.5 (Verification, Benchmark & Calibration):** Full report at
+`docs/reviews/task-4.5-verification.md`. The headline: this is the
+**first task to test the AI path against a real model** rather than a
+scripted response - 5 live calls to a local Ollama server
+(`llama3:latest`), with genuine timing/token/prompt-size data. Confirmed
+end-to-end (Tier 0/1 deterministic, Tier 2 real-model) with zero
+workflow changes required. Two real (not hypothetical) findings: a
+malformed/truncated JSON response from the real model (correctly
+rejected by `Validate AI Response Shape`, exactly as designed), and a
+case where the model cited fully real, correctly-grounded evidence and
+still drew the wrong conclusion from it (`PASS` at 0.95 confidence for a
+verdict its own `reasoning` field describes as a contradiction) - the
+Trust Layer's structural grounding check has no way to catch this, since
+nothing about it is structurally wrong. Confidence-threshold calibration
+is inconclusive (this benchmark's samples didn't land near the 0.3/0.7
+boundaries), not confirmed-good. Existing 82-check regression suite:
+zero regressions.
+
+**Task 5 (Documentation Agent):** `06-documentation-agent.json` consumes
+only the Decision Contract (`docs/contracts/decision-contract.md`) and
+produces the new Report Contract (`docs/contracts/report-contract.md`) -
+`{workflow_version, report_version, test_case, decision, report}`. Three
+nodes: `Validate Contract` (envelope check, mirrors every prior
+workflow's convention - upstream ERROR payloads pass through unchanged),
+`Route Validation Errors` (same IF-node pattern as every prior workflow),
+`Build Report Contract` (the only real work - every `report.*` field is
+either carried forward unchanged or built via a fixed lookup table /
+string template, never generated). No AI call anywhere in this file - the
+Documentation Agent's job is formatting a verdict that was already
+decided, not deciding anything. No Excel, Google Sheets, PDF, dashboard,
+or Jira reference anywhere in the workflow or the contract it produces -
+those are downstream renderer workflows (Task 5.1+), a deliberate design
+decision so the same Report Contract works for all of them. Script
+harness: 61/61 checks (PASS/FAIL/BLOCKED/MANUAL_REVIEW across both
+deterministic and AI-assisted `decision_basis.tier` values, upstream
+ERROR passthrough, 8 malformed-input rejections). See "Verification
+notes" below. Not yet imported/run inside a live n8n instance, same
+caveat as every prior workflow.
+
+**Task 5 (Documentation Agent):** Same script-harness approach as every
+prior task - `Validate Contract` and `Build Report Contract` extracted
+from the committed JSON and chained as n8n would connect them. 61/61
+checks passed: a deterministic-tier `PASS` and an `ai_assisted`-tier
+`FAIL`/`BLOCKED`/`MANUAL_REVIEW` each verified for `test_case`/`decision`
+preservation (byte-for-byte, via `JSON.stringify` equality against the
+source Decision Contract), correct `report.actual_result` extraction
+across all three evidence-rendering conventions the pipeline currently
+produces (`status_code: expected X, actual Y` from Tier 1,
+`transport.status: X` from Tier 0, `actual_status: X` from the AI path),
+`report.manual_review` set correctly, the four fixed `tester_notes`
+templates, and that no renderer name (excel/pdf/sheets/jira/dashboard)
+appears anywhere in a produced Report Contract. Plus: an upstream ERROR
+payload passes through `Validate Contract` unchanged, and 8 malformed-
+Decision-Contract cases (missing `verdict`, invalid status enum,
+out-of-range confidence, empty evidence, missing `decision_basis.tier`,
+missing `metadata.decided_at`, non-object input, array input) all produce
+`INVALID_DECISION_CONTRACT`. Same live-n8n verification caveat as every
+prior task applies - no running n8n instance was available in this
+environment.
+
 ## Next up
 
-Task 4.5 (Decision Contract Validation) - the Task 4 tree's last item,
-likely a final consistency/schema-conformance pass now that 4.1-4.4 have
-built tier routing, the AI call, prompt construction, and the trust
-layer end-to-end. Before any of them: import
-`05-decision-orchestrator.json` into a real n8n instance with a real
-Anthropic credential and run at least one Tier 2 case end-to-end -
-nothing about the actual AI call has been verified
-outside this environment's mocked harness.
+Task 5.1 (Excel Writer) - the first Report Contract renderer. Before it:
+this task deliberately left the Excel Writer entirely unbuilt (Milestone
+1 scope for Task 5 was the Report Contract and its producer only, not any
+renderer), so Task 5.1 starts from a clean, format-independent contract
+rather than retrofitting one out of Excel-specific fields. Also still
+open from Task 4: don't treat high AI confidence as a correctness
+guarantee (a real false-positive was demonstrated at 0.95 in Task 4.5);
+a real n8n + real Anthropic credential verification pass remains the
+largest unclosed gap across the whole pipeline, Documentation Agent
+included.
