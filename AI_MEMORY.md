@@ -412,3 +412,125 @@ no tier funnel, no branching beyond the standard ERROR-passthrough IF.
   values across all four verdict statuses, byte-for-byte `test_case`/
   `decision` preservation, and 8 malformed-Decision-Contract rejections.
   See `PROJECT_STATUS.md`'s "Verification notes" for the full list.
+
+## Task 5.1 (Excel Writer) - things worth knowing
+
+`06.1-excel-writer.json` is the first workflow in this project built as a
+**renderer** rather than a pipeline stage - it consumes the Report
+Contract and produces no contract of its own, just a side effect (an
+updated file) plus a small internal confirmation record. It's also the
+first workflow shaped by mid-task feedback that arrived as its own design
+document rather than a correction: the "One Small Improvement" request
+asked for a generalized Report Contract → Renderer Adapter → COLUMN_MAP →
+Renderer pattern, given *while* Task 5.1's original (simpler) brief was
+still being read - worth remembering that this project's task briefs can
+arrive in two parts like that, and the second part isn't optional
+polish, it's the actual target shape.
+
+- **The four-stage split (`Excel Adapter` → `Apply Column Map` →
+  read/locate/merge → write) is doing real isolation work, not just
+  matching a diagram.** `Excel Adapter` is the *only* node in the whole
+  workflow that reads `report.*`/`test_case.*` field names - everything
+  after it only ever sees the 9 canonical renderer field names. That
+  means a hypothetical Google Sheets renderer's own `Sheets Adapter` node
+  would be *byte-for-byte identical code* to `Excel Adapter` (both derive
+  the same 9 fields from the same Report Contract) - only `Apply Column
+  Map` (target column identifiers) and everything after it (xlsx vs.
+  Sheets API) would need to differ. That's the concrete, provable form of
+  "Report Contract never changes to support a new renderer," not just an
+  architectural aspiration.
+- **"Never write Test ID/Description/Steps/Expected Result" is enforced
+  structurally, not by a check.** `COLUMN_MAP` in `Apply Column Map`
+  simply never contains those four canonical keys, so `__updates` (the
+  object that gets spread onto the matched row) can never carry those
+  header names - there's no `if (column !== 'Test ID')` guard anywhere
+  because there's nothing to guard against. This is the same pattern
+  `Prompt Builder` in `05-decision-orchestrator.json` uses for its
+  evidence allow-list (Task 4.3) - keep the forbidden thing structurally
+  absent rather than filtered out.
+- **Read-modify-write instead of append-only was a deliberate rejection
+  of the simpler option.** n8n's `spreadsheetFile` `toFile` operation
+  will happily write whatever items reach it as a brand-new file; the
+  laziest implementation would have been "append a row with just the
+  renderer-owned columns filled in" and let the workbook accumulate
+  duplicate/partial rows over reruns. That would have failed the brief's
+  explicit "locate the target row" and idempotency requirements the
+  moment the same test case was reported twice (a re-run, a retry
+  upstream) - so `Locate & Merge Row` always operates over the *complete*
+  existing row set, and `Row Located?` treats "no match" as a hard error
+  (`TARGET_ROW_NOT_FOUND`) rather than silently falling back to append.
+- **Verified with a script harness against a synthetic in-memory
+  workbook, not a real xlsx file.** `n8n-nodes-base.readWriteFile` and
+  `n8n-nodes-base.spreadsheetFile` are native nodes with no custom JS to
+  extract (same limitation this project has always had for native
+  nodes - Task 3.2's HTTP Executor worked around it by hitting a real
+  target, httpbin.org, directly; there was no equivalent "real target" to
+  hit here without a live n8n + a real file on disk). 113/113 checks
+  passed, including a genuine idempotency test: running the same Report
+  Contract through the extracted pipeline twice, feeding the second run's
+  workbook input from the first run's output, and asserting the final row
+  set is byte-for-byte identical both times - not just "no crash on
+  rerun," an actual convergence check.
+
+## Task 6 (Jira Agent) - things worth knowing
+
+`07-jira-agent.json` is this project's second renderer-shaped workflow
+(after the Excel Writer) but the first one whose job is deciding *whether
+to act at all*, not just how - most of its work happens before any
+formatting: `PASS`/`BLOCKED` never get a draft, and `MANUAL_REVIEW` is a
+policy call gated behind a single config constant, not a hardcoded yes/no.
+
+- **`priority` reusing `next_action` instead of a confidence threshold is
+  the most consequential design decision in this task, and it wasn't the
+  obvious first instinct.** The brief asks for a "Priority" field and it
+  would have been easy to write `confidence >= 0.8 ? 'High' : 'Medium'`
+  directly in this workflow - a threshold that already exists, just not
+  here. That would have created two independent copies of the same
+  policy number (0.8) in two files, silently able to drift out of sync.
+  Reading `decision.verdict.next_action` instead (`create_jira` → `High`,
+  `flag_for_review` → `Medium`) means there is exactly one place
+  (`05-decision-orchestrator.json`'s `Apply Trust Rules`,
+  `TRUST_CONFIG.FAIL_AUTO_JIRA_THRESHOLD`) that owns "how confident is
+  confident enough" - this is `docs/workflow-standards.md`'s "nothing
+  downstream re-derives a value another workflow already computed" rule
+  applied to a field the Decision Contract never explicitly names as
+  reusable, but structurally already answers.
+- **`report` inside the Jira Draft Contract is the *entire* Report
+  Contract, not a projection of just the fields this task's brief lists
+  ("Summary, Description, Expected Result, Actual Result, Reproduction
+  Steps, Evidence, Labels, Priority, Components").** Carrying the full
+  object costs nothing extra to build (it's already in scope as `item`)
+  and means a future Duplicate Check or approval-queue consumer that
+  needs, say, `report.decision.decision_basis.model_version` for cost
+  auditing on drafted tickets never needs a Jira Draft Contract shape
+  change - the same "carry the whole upstream object forward, never a
+  hand-picked subset" pattern the Report Contract itself established for
+  `decision.verdict`/`decision.decision_basis` in Task 5.
+- **`jira.manual_review` is populated even when `jira.required` is
+  `false`.** It would have been consistent with the other fields to null
+  it out too when no draft is built, but `manual_review` answers a
+  different question than the other nine fields (all of which describe a
+  *ticket that doesn't exist yet*) - it's a fact about the Report
+  Contract's own verdict, independent of whether Jira drafting is
+  turned on for that verdict. Keeping it populated lets a consumer tell
+  "MANUAL_REVIEW with drafting off" apart from "FAIL," "PASS," and
+  "BLOCKED" even by reading only the `jira` object, without reaching back
+  into `report.report.status`.
+- **Verified with the same script-harness approach as every prior task**
+  (no live n8n instance available) - 62/62 checks, including patching
+  `DRAFT_ON_MANUAL_REVIEW` to `true` in-harness (string-replacing the
+  extracted node source before executing it) to prove the configurable
+  path actually works, not just that the default-off path does - a
+  config flag that's never been flipped in a test isn't verified, it's
+  assumed.
+- **Every stage past "Jira Draft Contract" in the architecture diagram
+  (Duplicate Check, Draft Ticket, Human Approval, Create/Update Jira) is
+  a documented NoOp, not a stub with a `// TODO`.** Each one's `notes`
+  field states exactly what a future task would implement there and
+  where that implementation would plug into the existing contract
+  (additively - e.g. Duplicate Check would add `jira.duplicate_of`, never
+  reshape an existing field). This is the same "extension point over
+  placeholder" discipline `05-decision-orchestrator.json`'s Confidence &
+  Trust Layer sticky notes and `06.1-excel-writer.json`'s Architecture
+  Note already established - a reader should never have to guess what an
+  empty NoOp was *for*.

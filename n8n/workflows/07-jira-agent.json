@@ -1,0 +1,272 @@
+{
+  "name": "07 - Jira Agent",
+  "nodes": [
+    {
+      "id": "sticky-scope-note",
+      "name": "Scope Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-140, -420],
+      "parameters": {
+        "width": 520,
+        "height": 380,
+        "content": "## Milestone 1 - Task 6: Jira Agent\n\nConsumes the Report Contract produced by 06-documentation-agent (docs/contracts/report-contract.md) - never a Decision Contract directly - and produces a Jira Draft Contract (docs/contracts/jira-draft-contract.md). No AI call, no direct Jira API call anywhere in this file - every field is either carried forward unchanged or built via a fixed, deterministic template/lookup table, exactly like the Documentation Agent (06) and Excel Writer (06.1) before it.\n\nDrafts are built only for FAIL (always) and MANUAL_REVIEW (configurable, off by default - see 'Build Jira Draft Contract'). PASS and BLOCKED never produce a draft - `jira.required` is `false` and every other `jira.*` field is null/empty, never fabricated."
+      }
+    },
+    {
+      "id": "sticky-architecture-note",
+      "name": "Architecture Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, -420],
+      "parameters": {
+        "width": 640,
+        "height": 380,
+        "content": "## Architecture (Task 6 brief)\n\n```\nReport Contract\n      |\n      v\nJira Agent          <- 'Validate Contract' + 'Build Jira Draft Contract'\n      |\n      v\nJira Draft Contract\n      |\n      v\nDuplicate Check      <- 'Duplicate Check (Extension Point)': architecture\n      |                    only for Milestone 1, see its own notes\n      v\nDraft Ticket         <- 'Draft Ticket': not-yet-built hand-off\n      |\n      v\nHuman Approval       <- 'Human Approval': not-yet-built hand-off\n      |\n      v\nCreate / Update Jira <- 'Create / Update Jira': not-yet-built hand-off,\n                          this is the one point a real Jira API call\n                          would ever be made - never in this workflow\n```\n\nEvery stage from 'Duplicate Check' onward is a NoOp placeholder with a documented contract for what a future task implements there - this workflow's own job stops at producing a correct Jira Draft Contract. No Jira issue is ever created by this file (constraint: 'No Jira API')."
+      }
+    },
+    {
+      "id": "sticky-design-note",
+      "name": "Design Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1180, -420],
+      "parameters": {
+        "width": 560,
+        "height": 420,
+        "content": "## Design notes\n\n- Every `jira.*` field is reused verbatim from the Report Contract (test_case.description/expected_result/steps, report.reasoning/actual_result/manual_review, decision.verdict.evidence) or built via a fixed lookup table (labels, components) / a direct re-read of an already-computed decision (priority from decision.verdict.next_action) - never a new judgment. 'priority' deliberately reuses `next_action` (create_jira -> High, flag_for_review -> Medium) instead of re-deriving a confidence threshold, per docs/workflow-standards.md's 'nothing downstream re-derives a value another workflow already computed' rule - that threshold was already decided once, in 05-decision-orchestrator.json's Apply Trust Rules.\n- `report` inside the Jira Draft Contract preserves the ENTIRE validated Report Contract, unchanged - not a subset - so `report.test_case`, `report.decision`, `report.report` all remain reachable for full traceability, and this workflow can truthfully claim it never modifies the Report Contract it received (it only ever reads from a copy of it).\n- DRAFT_ON_MANUAL_REVIEW is a single named constant at the top of 'Build Jira Draft Contract' - the one config point Task 6's brief calls for ('MANUAL_REVIEW optional, configurable'). Flipping it is a one-line change, not a workflow redesign."
+      }
+    },
+    {
+      "id": "trigger-execute-workflow",
+      "name": "Report Contract Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-140, 60],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "validate-contract-node",
+      "name": "Validate Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 60],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Confirms the incoming item is a well-formed Report Contract\n// (docs/contracts/report-contract.md) before any draft logic runs. This\n// is the only node that validates the contract's envelope shape - 'Build\n// Jira Draft Contract' trusts it completely.\nconst STAGE = 'jira_agent';\nconst WORKFLOW_VERSION = '1.0';\nconst VALID_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'MANUAL_REVIEW'];\n\nfunction errorPayload(code, message, details) {\n  return {\n    status: 'ERROR',\n    stage: STAGE,\n    code,\n    message,\n    details: details || {},\n    timestamp: new Date().toISOString(),\n    workflow_version: WORKFLOW_VERSION\n  };\n}\n\nconst item = $input.item.json;\n\n// ERROR payloads produced upstream (Documentation Agent, Excel Writer,\n// or anything earlier) are not Report Contracts and must not be\n// re-validated as one - pass them through unchanged, same convention as\n// every prior workflow.\nif (item && item.status === 'ERROR') {\n  return { json: item };\n}\n\nif (typeof item !== 'object' || item === null || Array.isArray(item)) {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract must be a JSON object',\n    { received_type: Array.isArray(item) ? 'array' : typeof item }\n  ) };\n}\n\nconst requiredFields = ['workflow_version', 'report_version', 'test_case', 'decision', 'report'];\nconst missingFields = requiredFields.filter((field) => item[field] === undefined);\n\nif (missingFields.length > 0) {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    `Report Contract is missing required field(s): ${missingFields.join(', ')}`,\n    { missing_fields: missingFields }\n  ) };\n}\n\nconst tc = item.test_case;\nif (typeof tc !== 'object' || tc === null || Array.isArray(tc) ||\n    typeof tc.test_id !== 'string' || tc.test_id.trim() === '' ||\n    typeof tc.description !== 'string' ||\n    typeof tc.expected_result !== 'string' ||\n    typeof tc.steps !== 'string' ||\n    typeof tc.verification_type !== 'string') {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract test_case must be an object with test_id/description/expected_result/steps/verification_type',\n    {}\n  ) };\n}\n\nconst r = item.report;\nif (typeof r !== 'object' || r === null || Array.isArray(r) ||\n    !VALID_STATUSES.includes(r.status) ||\n    typeof r.actual_result !== 'string' ||\n    typeof r.reasoning !== 'string' ||\n    typeof r.manual_review !== 'boolean') {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract report object is missing or has an invalid status/actual_result/reasoning/manual_review',\n    { test_id: tc.test_id }\n  ) };\n}\n\nconst v = item.decision && item.decision.verdict;\nif (typeof v !== 'object' || v === null || Array.isArray(v) ||\n    !Array.isArray(v.evidence) || v.evidence.length === 0 ||\n    typeof v.next_action !== 'string') {\n  return { json: errorPayload(\n    'INVALID_REPORT_CONTRACT',\n    'Report Contract decision.verdict must be an object with a non-empty evidence array and a next_action',\n    { test_id: tc.test_id }\n  ) };\n}\n\nreturn { json: item };"
+      }
+    },
+    {
+      "id": "route-validation-errors-node",
+      "name": "Route Validation Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 60],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-is-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "build-jira-draft-contract-node",
+      "name": "Build Jira Draft Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 160],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Build Jira Draft Contract - the Jira Agent's only real work. Every\n// jira.* value is either reused verbatim from the Report Contract or\n// built through a fixed, deterministic template/lookup table - no AI\n// call, no free-form generation. See docs/contracts/jira-draft-\n// contract.md and the Design Note sticky.\nconst JIRA_WORKFLOW_VERSION = '1.0';\nconst JIRA_CONTRACT_VERSION = '1.0';\n\n// The single config point Task 6's brief calls for ('MANUAL_REVIEW\n// optional, configurable'). Off by default - MANUAL_REVIEW cases are\n// held for a human to read in the report, not auto-drafted, until this\n// is deliberately turned on.\nconst DRAFT_ON_MANUAL_REVIEW = false;\n\n// verification_type -> Jira component(s). Single source of truth, same\n// manual-sync convention as AGENT_ROUTES (01-ingestion.json) / COLUMN_MAP\n// (06.1-excel-writer.json) - Milestone 1 only ever produces 'api'.\nconst COMPONENT_MAP = {\n  api: ['API']\n};\n\nfunction buildLabels(status) {\n  const labels = ['ai-detected'];\n  if (status === 'FAIL') labels.push('needs-triage');\n  if (status === 'MANUAL_REVIEW') labels.push('manual-review');\n  return labels;\n}\n\n// Reuses the routing decision 05-decision-orchestrator.json's Apply\n// Trust Rules already made (TRUST_CONFIG.FAIL_AUTO_JIRA_THRESHOLD) -\n// never re-derives a confidence threshold here. 'create_jira' only ever\n// occurs on a high-confidence FAIL; 'flag_for_review' covers every\n// lower-confidence FAIL and every MANUAL_REVIEW.\nfunction priorityFromNextAction(nextAction) {\n  if (nextAction === 'create_jira') return 'High';\n  if (nextAction === 'flag_for_review') return 'Medium';\n  return null;\n}\n\nconst item = $input.item.json;\nconst report = item.report;\nconst testCase = item.test_case;\nconst verdict = item.decision.verdict;\n\nconst required = report.status === 'FAIL' || (report.status === 'MANUAL_REVIEW' && DRAFT_ON_MANUAL_REVIEW);\n\nconst jira = required ? {\n  required: true,\n  summary: `${report.status}: ${testCase.description}`,\n  description: report.reasoning,\n  expected_result: testCase.expected_result,\n  actual_result: report.actual_result,\n  reproduction_steps: testCase.steps,\n  evidence: verdict.evidence,\n  priority: priorityFromNextAction(verdict.next_action),\n  labels: buildLabels(report.status),\n  components: COMPONENT_MAP[testCase.verification_type] || [],\n  manual_review: report.manual_review\n} : {\n  required: false,\n  summary: null,\n  description: null,\n  expected_result: null,\n  actual_result: null,\n  reproduction_steps: null,\n  evidence: [],\n  priority: null,\n  labels: [],\n  components: [],\n  manual_review: report.manual_review\n};\n\nreturn { json: {\n  workflow_version: JIRA_WORKFLOW_VERSION,\n  jira_version: JIRA_CONTRACT_VERSION,\n  report: item,\n  jira\n} };"
+      }
+    },
+    {
+      "id": "duplicate-check-node",
+      "name": "Duplicate Check (Extension Point)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [740, 60],
+      "notes": "Architecture-only for Milestone 1 (Task 6 brief: 'No real Jira API call is required'). Passes every Jira Draft Contract through unchanged. Future extension point: query the Jira API for an existing open issue labeled with this item's report.test_case.test_id; if found, this stage would set an additional field (e.g. jira.duplicate_of) and 'Draft Ticket' would add a comment to that issue instead of drafting a new one - docs/architecture/milestone-1.md section 5's 'Jira Agent' row already specifies this exact behavior. Adding it later is additive to the Jira Draft Contract, not a redesign of this workflow.",
+      "parameters": {}
+    },
+    {
+      "id": "draft-required-node",
+      "name": "Draft Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 60],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-required",
+              "leftValue": "={{ $json.jira.required }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "draft-ticket-node",
+      "name": "Draft Ticket",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1180, -40],
+      "notes": "Hand-off boundary, not yet built (Task 6+). Receives a Jira Draft Contract with jira.required === true. A future task renders this into whatever a human approval queue needs to see (a Slack message, an n8n manual-approval node, a review UI) - still no Jira API call happens here.",
+      "parameters": {}
+    },
+    {
+      "id": "human-approval-node",
+      "name": "Human Approval",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1400, -40],
+      "notes": "Hand-off boundary, not yet built (Task 6+). Milestone 1's human-gate requirement (docs/architecture/milestone-1.md: 'Do not automatically create Jira issues' / 'Auto-approval of Jira tickets - stays human-gated'). A draft only ever proceeds past this point on an explicit approval signal.",
+      "parameters": {}
+    },
+    {
+      "id": "create-update-jira-node",
+      "name": "Create / Update Jira",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1620, -40],
+      "notes": "Hand-off boundary, not yet built (Task 6+ - constraint: 'No Jira API' for this task). The one point in the whole Jira Layer a real Jira API call would ever be made - create_ticket for a new draft, or update/comment for a Duplicate Check match. Never called from 07-jira-agent.json itself.",
+      "parameters": {}
+    },
+    {
+      "id": "no-draft-required-node",
+      "name": "No Draft Required",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1180, 160],
+      "notes": "The expected, normal terminal state for a PASS or BLOCKED report, or a MANUAL_REVIEW report while DRAFT_ON_MANUAL_REVIEW is off. jira.required is false; no ticket is drafted, reviewed, or created for this test case.",
+      "parameters": {}
+    },
+    {
+      "id": "jira-layer-complete-node",
+      "name": "Jira Layer Complete",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1840, 60],
+      "notes": "Terminal node. Every path - a validation ERROR payload, a completed (but not yet API-called) draft, or a no-draft-required item - converges here. This workflow has no consumer of its own.",
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Report Contract Trigger": {
+      "main": [
+        [
+          { "node": "Validate Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Contract": {
+      "main": [
+        [
+          { "node": "Route Validation Errors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route Validation Errors": {
+      "main": [
+        [
+          { "node": "Jira Layer Complete", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Build Jira Draft Contract", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Jira Draft Contract": {
+      "main": [
+        [
+          { "node": "Duplicate Check (Extension Point)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Duplicate Check (Extension Point)": {
+      "main": [
+        [
+          { "node": "Draft Required?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Draft Required?": {
+      "main": [
+        [
+          { "node": "Draft Ticket", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "No Draft Required", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Draft Ticket": {
+      "main": [
+        [
+          { "node": "Human Approval", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Human Approval": {
+      "main": [
+        [
+          { "node": "Create / Update Jira", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create / Update Jira": {
+      "main": [
+        [
+          { "node": "Jira Layer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "No Draft Required": {
+      "main": [
+        [
+          { "node": "Jira Layer Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
+ 
