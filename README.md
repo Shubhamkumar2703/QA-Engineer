@@ -220,7 +220,7 @@ The additive persistence schema and lifecycle contract are available on the
 - `db/migrations/002_defect_lifecycle.sql` — defect drafts, active-fingerprint uniqueness, and audit events.
 - `docs/architecture/defect-lifecycle.md` — duplicate handling, explicit review states, and submission guard requirements.
 
-These are foundations, not a claim that the n8n approval flow is operational yet. The existing Jira Agent still emits a draft contract; the duplicate-check, approval/rejection handlers, and submission adapter must be wired and tested before this lifecycle is considered complete. The existing API-testing workflow remains unchanged.
+The database layer now includes transactional lifecycle functions in `db/migrations/003_defect_lifecycle_functions.sql` and a rollback-only regression script at `tests/sql/defect_lifecycle.sql`. It supports idempotent draft creation, active-fingerprint duplicate detection, explicit approve/reject transitions, append-only audit events, and an APPROVED-only submission-intent guard. The test script is committed but has not yet been executed against a live PostgreSQL instance. n8n workflow wiring, authenticated reviewer endpoints/UI, concurrent integration testing, and the Jira submission adapter remain unfinished; no Jira issue is created. The existing API-testing workflow remains unchanged. See [defect lifecycle design and verification instructions](docs/architecture/defect-lifecycle.md).
 
 ## Local setup
 
