@@ -18,46 +18,113 @@ The design separates **execution, verdicts, reporting, and ticket preparation** 
 
 ## Workflow overview
 
-```text
-Excel test script
-      |
-      v
-01 - Excel Ingestion
-  Parse rows, map columns, filter blanks, validate test cases
-      |
-      v
-02 - API Request Builder
-  Build a validated request contract; do not execute it
-      |
-      v
-03 - HTTP Executor
-  Execute HTTP request and capture response or transport error
-      |
-      v
-04 - Response Normalizer
-  Normalize success/error paths into one response contract
-      |
-      v
-05 - Decision Orchestrator
-  Tier 0: transport failure -> BLOCKED (no AI)
-  Tier 1: exact expected-status match -> PASS (no AI)
-  Tier 2: ambiguous/mismatched result -> AI-assisted judgment
-           + structured-output validation + evidence trust checks
-      |
-      v
-06 - Documentation Agent
-  Convert the decision into a renderer-neutral Report Contract
-      |
-      +---------------------------+
-      |                           |
-      v                           v
-06.1 - Excel Writer          07 - Jira Agent
-Update existing row          Build Jira Draft Contract
-in report workbook            Human approval / Jira write are
-                              documented extension points
+The architecture below reflects the repository's **current workflow design** and separates implemented workflow stages from integrations that remain unfinished. The diagram is organized into readable stages rather than one long horizontal pipeline.
+
+```mermaid
+flowchart TB
+    %% Stage 1: input
+    subgraph INPUT["1 · Test Input"]
+        direction TB
+        XLSX["Excel Test Script"]
+        INGEST["01 · Excel Ingestion"]
+        XLSX --> INGEST
+    end
+
+    %% Stage 2: API execution
+    subgraph API["2 · API Test Execution"]
+        direction TB
+        BUILDER["02 · API Request Builder"]
+        EXECUTOR["03 · HTTP Executor"]
+        NORMALIZER["04 · Response Normalizer"]
+        BUILDER --> EXECUTOR --> NORMALIZER
+    end
+
+    TARGET["Target API Under Test"]
+
+    %% Stage 3: decision engine
+    subgraph DECISION["3 · Three-Tier Decision Orchestrator"]
+        direction TB
+        T0{"Tier 0 · Transport response?"}
+        BLOCKED["BLOCKED<br/>No usable HTTP response"]
+        T1{"Tier 1 · Expected status<br/>matches actual status?"}
+        PASS["PASS<br/>Deterministic verdict"]
+        T2["Tier 2 · AI-assisted analysis"]
+        TRUST["Validate structured output,<br/>ground evidence, apply trust rules"]
+        VERDICT["Decision Contract"]
+
+        T0 -->|No response| BLOCKED
+        T0 -->|Response received| T1
+        T1 -->|Exact match| PASS
+        T1 -->|Mismatch / ambiguous| T2 --> TRUST
+        BLOCKED --> VERDICT
+        PASS --> VERDICT
+        TRUST --> VERDICT
+    end
+
+    CLAUDE["Anthropic Claude API<br/>Tier 2 only"]
+
+    %% Stage 4: reporting
+    subgraph REPORTING["4 · Reporting"]
+        direction TB
+        DOCS["06 · Documentation Agent"]
+        CONTRACT["Renderer-neutral<br/>Report Contract"]
+        WRITER["06.1 · Excel Writer"]
+        REPORT["Updated Excel QA Report"]
+        DOCS --> CONTRACT --> WRITER --> REPORT
+    end
+
+    %% Stage 5: Jira draft
+    subgraph JIRA_FLOW["5 · Defect Drafting · Partial"]
+        direction TB
+        JIRA["07 · Jira Agent"]
+        DRAFT["Jira Draft Contract<br/>Draft only"]
+        DUP["Future: Duplicate Check"]
+        APPROVAL["Future: Human Approve / Reject"]
+        SUBMIT["Future: Jira Create / Update"]
+        JIRA --> DRAFT
+        DRAFT -.-> DUP
+        DUP -.-> APPROVAL
+        APPROVAL -.-> SUBMIT
+    end
+
+    REVIEWER["Human Reviewer"]
+    DB[("PostgreSQL 16<br/>Schema / optional trace logging")]
+
+    INGEST --> BUILDER
+    EXECUTOR <--> TARGET
+    NORMALIZER --> T0
+    T2 -. "Ambiguous cases only" .-> CLAUDE
+    CLAUDE -. "Structured response" .-> TRUST
+    VERDICT --> DOCS
+    CONTRACT -. "Failure draft input" .-> JIRA
+    DRAFT -. "Review draft" .-> REVIEWER
+    REPORT -. "Optional trace logging" .-> DB
+
+    %% Visual styling
+    classDef input fill:#E8F2FF,stroke:#3674C8,color:#16345B,stroke-width:1.5px
+    classDef execution fill:#E8F7EF,stroke:#299764,color:#124B32,stroke-width:1.5px
+    classDef decision fill:#F1EAFE,stroke:#8B5CC7,color:#45216F,stroke-width:1.5px
+    classDef reporting fill:#FFF3DD,stroke:#D99424,color:#68420A,stroke-width:1.5px
+    classDef planned fill:#FFF0F0,stroke:#D66A6A,color:#792E2E,stroke-dasharray:5 5
+    classDef infra fill:#F0F2F5,stroke:#7C8798,color:#303A49
+
+    class XLSX,INGEST input
+    class BUILDER,EXECUTOR,NORMALIZER execution
+    class T0,T1,T2,BLOCKED,PASS,TRUST,VERDICT decision
+    class DOCS,CONTRACT,WRITER,REPORT,JIRA,DRAFT reporting
+    class DUP,APPROVAL,SUBMIT planned
+    class TARGET,CLAUDE,REVIEWER,DB infra
 ```
 
-The pipeline is split intentionally. The request builder prepares a request but does not send it; the executor records what happened but does not judge it; the normalizer provides a stable representation; the decision stage produces a verdict; reporting formats the verdict without re-deciding it; and the Jira stage creates a draft representation without silently submitting it.
+**How to read the diagram**
+
+1. **Ingestion and execution:** Excel rows become test-case inputs, request contracts, HTTP calls, and normalized response records.
+2. **Decision engine:** Tier 0 returns `BLOCKED` when no usable HTTP response exists. Tier 1 returns `PASS` for an exact expected/actual status-code match. Tier 2 sends cases requiring interpretation to the AI-assisted path, then validates the structured response, grounds evidence, and applies trust rules.
+3. **Reporting:** The Documentation Agent creates a renderer-neutral Report Contract. The separate `06.1 · Excel Writer` maps report fields into the workbook.
+4. **Defect drafting:** The Jira Agent creates a deterministic Jira Draft Contract for eligible cases. The duplicate-check, approval/rejection, and Jira create/update steps are **future extension points**, not working integrations.
+5. **Infrastructure boundary:** PostgreSQL schema and Compose configuration are included, but the diagram does not imply that complete live trace logging has been verified.
+
+> **Implementation status:** This diagram represents the workflow definitions and intended data flow, not proof of a fully verified end-to-end deployment. Live n8n Excel I/O and the real Anthropic API path still require integration verification. Jira duplicate checking, human approval, and live issue creation are not implemented.
 
 ## Key engineering features
 
