@@ -211,6 +211,17 @@ The schema and Compose setup are included as infrastructure foundations; the ful
 | AI-assisted interpretation | Anthropic Messages API integration in workflow definition | Handles cases not resolved by deterministic rules; live API verification remains outstanding |
 | Issue tracking | Jira REST integration design | Draft contract is implemented; duplicate check, approval, and real submission remain unimplemented |
 
+
+### Defect lifecycle foundation (in progress)
+
+The additive persistence schema and lifecycle contract are available on the
+`feature/defect-approval-lifecycle` branch:
+
+- `db/migrations/002_defect_lifecycle.sql` — defect drafts, active-fingerprint uniqueness, and audit events.
+- `docs/architecture/defect-lifecycle.md` — duplicate handling, explicit review states, and submission guard requirements.
+
+These are foundations, not a claim that the n8n approval flow is operational yet. The existing Jira Agent still emits a draft contract; the duplicate-check, approval/rejection handlers, and submission adapter must be wired and tested before this lifecycle is considered complete. The existing API-testing workflow remains unchanged.
+
 ## Local setup
 
 ### Prerequisites
