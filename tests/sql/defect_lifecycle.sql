@@ -72,11 +72,30 @@ BEGIN
         NULL;
     END;
 
+    -- A separate draft can be rejected, and rejection must block submission.
+    v_first := create_defect_draft(
+        'test-idempotency-003', 'test-fingerprint-002', 'QA-LC-003',
+        'Unexpected response content', 'medium', 'https://api.example.test/items',
+        'GET', 'JSON object', 'HTML page', '["send GET request"]'::jsonb,
+        '{"content_type":"text/html"}'::jsonb, 'sql-test'
+    );
+    v_id := (v_first->'defect'->>'defect_id')::UUID;
+    v_review := review_defect_draft(v_id, 'reject', 'reviewer@example.test', 'Expected behavior was clarified');
+    IF v_review->>'outcome' <> 'rejected' THEN
+        RAISE EXCEPTION 'Expected rejected outcome';
+    END IF;
+
+    BEGIN
+        PERFORM request_defect_submission(v_id, 'sql-test');
+        RAISE EXCEPTION 'Rejected draft must not pass submission guard';
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+        NULL;
+    END;
+
     SELECT count(*) INTO v_count FROM defect_audit_events
-     WHERE defect_id = v_id
-       AND event_type IN ('DRAFT_CREATED', 'DUPLICATE_DETECTED', 'APPROVED', 'SUBMISSION_REQUESTED');
-    IF v_count <> 4 THEN
-        RAISE EXCEPTION 'Expected four audit events for canonical draft, found %', v_count;
+     WHERE defect_id = v_id AND event_type IN ('DRAFT_CREATED', 'REJECTED');
+    IF v_count <> 2 THEN
+        RAISE EXCEPTION 'Expected draft creation and rejection audit events, found %', v_count;
     END IF;
 END;
 $$;
