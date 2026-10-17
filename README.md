@@ -1,4 +1,4 @@
-# QA Test Agent
+# QA Engineer — AI-assisted API testing and QA reporting
 
 **An AI-assisted API testing and QA reporting pipeline built with n8n, PostgreSQL, Excel, and a guarded LLM decision layer.**
 
@@ -126,6 +126,18 @@ flowchart TB
 
 > **Implementation status:** This diagram represents the workflow definitions and intended data flow, not proof of a fully verified end-to-end deployment. Live n8n Excel I/O and the real Anthropic API path still require integration verification. Jira duplicate checking, human approval, and live issue creation are not implemented.
 
+
+## Demonstrated local n8n run
+
+The screenshots shared for this submission show a local n8n workflow execution through the HTTP Executor and the final QA-report stage.
+
+- The workflow canvas shows the path from Excel input and request building through HTTP execution, response normalization, deterministic decisioning, failure analysis, the Ollama chat-model path, and **Final QA Report**.
+- The HTTP Request node shows **5 items on the success branch and 1 item on the error branch**. Captured HTTP responses include status codes **200, 201, 401, 500, and 204**; the deliberately unreachable endpoint returns `ECONNREFUSED`.
+- This demonstrates that HTTP error status codes can be captured as responses while a transport failure is represented separately as an execution error. A `401` or `500` response is not automatically a QA `FAIL` unless it is compared with that test case's expected behavior.
+- The workflow canvas reports a successful execution, and the Final QA Report node displays a structured output. This is evidence from the local n8n instance shown in the screenshots; it does **not** establish that every workflow in a fresh clone is fully configured or that every report classification and XLSX file write has been independently verified.
+
+Sample input workbooks are available in [`test-scripts/`](test-scripts/), including [`qa_agent_integration_sample.xlsx`](test-scripts/qa_agent_integration_sample.xlsx) and the validation samples in [`test-scripts/samples/`](test-scripts/samples/). The screenshots are currently shared as submission evidence and have not been added as image assets to this repository.
+
 ## Key engineering features
 
 ### 1. Contract-driven workflow boundaries
@@ -210,6 +222,17 @@ The schema and Compose setup are included as infrastructure foundations; the ful
 | Test input and reporting | Excel/XLSX | Source test cases and intended QA result updates |
 | AI-assisted interpretation | Anthropic Messages API integration in workflow definition | Handles cases not resolved by deterministic rules; live API verification remains outstanding |
 | Issue tracking | Jira REST integration design | Draft contract is implemented; duplicate check, approval, and real submission remain unimplemented |
+
+
+### Defect lifecycle foundation (in progress)
+
+The additive persistence schema and lifecycle contract are available on the
+`feature/defect-approval-lifecycle` branch:
+
+- `db/migrations/002_defect_lifecycle.sql` — defect drafts, active-fingerprint uniqueness, and audit events.
+- `docs/architecture/defect-lifecycle.md` — duplicate handling, explicit review states, and submission guard requirements.
+
+The database layer now includes transactional lifecycle functions in `db/migrations/003_defect_lifecycle_functions.sql` and a rollback-only regression script at `tests/sql/defect_lifecycle.sql`. It supports idempotent draft creation, active-fingerprint duplicate detection, explicit approve/reject transitions, append-only audit events, and an APPROVED-only submission-intent guard. The test script is committed but has not yet been executed against a live PostgreSQL instance. n8n workflow wiring, authenticated reviewer endpoints/UI, concurrent integration testing, and the Jira submission adapter remain unfinished; no Jira issue is created. The existing API-testing workflow remains unchanged. See [defect lifecycle design and verification instructions](docs/architecture/defect-lifecycle.md).
 
 ## Local setup
 
