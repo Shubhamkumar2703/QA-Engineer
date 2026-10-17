@@ -1,0 +1,53 @@
+flowchart LR
+    %% Runtime view derived from docker-compose.yml, workflow exports, and PROJECT_OVERVIEW.md.
+    %% Solid arrows show the primary execution path. Dashed arrows are optional or not yet integrated.
+
+    subgraph host["Host machine / operator boundary"]
+        XLS["Excel test script<br/>test-scripts/*.xlsx"]
+        REPORT["Excel report<br/>reports/*.xlsx"]
+        HUMAN["Human reviewer"]
+    end
+
+    subgraph docker["Docker Compose trust boundary"]
+        subgraph runtime["n8n container - workflow runtime"]
+            N8N["n8n Runtime<br/>UI + workflow execution"]
+            ING["01 - Ingestion"]
+            BUILD["02 - API Request Builder"]
+            HTTP["03 - HTTP Executor"]
+            NORM["04 - Response Normalizer"]
+            DEC["05 - Decision Orchestrator<br/>deterministic tiers + AI trust checks"]
+            DOC["06 - Documentation Agent<br/>Decision to Report Contract"]
+            EXCEL["06.1 - Excel Writer"]
+            JIRA["07 - Jira Agent<br/>draft only; approval/create are NoOps"]
+
+            N8N --> ING
+            ING --> BUILD --> HTTP --> NORM --> DEC --> DOC
+            DOC --> EXCEL
+            DOC --> JIRA
+        end
+
+        PG[("Postgres 16<br/>trace logging")]
+    end
+
+    subgraph external["External service trust boundary"]
+        API["Target API under test<br/>configured endpoint"]
+        CLAUDE["Anthropic Claude API<br/>ambiguous decisions only"]
+        JIRA_SVC["Jira service<br/>not currently called"]
+    end
+
+    XLS -->|mounted file input| ING
+    EXCEL -->|mounted file output| REPORT
+    HTTP -->|HTTPS request / response| API
+    DEC -. "Tier 2 only - HTTPS" .-> CLAUDE
+    CLAUDE -. "structured verdict + evidence" .-> DEC
+
+    N8N -. "optional trace writes" .-> PG
+    JIRA -. "draft for review" .-> HUMAN
+    HUMAN -. "future approved action; not implemented" .-> JIRA_SVC
+
+    classDef core fill:#dbeafe,stroke:#2563eb,color:#111827;
+    classDef store fill:#dcfce7,stroke:#16a34a,color:#111827;
+    classDef externalNode fill:#fef3c7,stroke:#d97706,color:#111827;
+    class N8N,ING,BUILD,HTTP,NORM,DEC,DOC,EXCEL,JIRA core;
+    class PG store;
+    class XLS,REPORT,HUMAN,API,CLAUDE,JIRA_SVC externalNode;
