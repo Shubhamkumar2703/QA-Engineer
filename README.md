@@ -129,14 +129,31 @@ flowchart TB
 
 ## Demonstrated local n8n run
 
-The screenshots shared for this submission show a local n8n workflow execution through the HTTP Executor and the final QA-report stage.
+The following screenshots are from a successful execution in the author's local n8n instance. They document the workflow canvas, HTTP Executor output, and Final QA Report node.
 
-- The workflow canvas shows the path from Excel input and request building through HTTP execution, response normalization, deterministic decisioning, failure analysis, the Ollama chat-model path, and **Final QA Report**.
-- The HTTP Request node shows **5 items on the success branch and 1 item on the error branch**. Captured HTTP responses include status codes **200, 201, 401, 500, and 204**; the deliberately unreachable endpoint returns `ECONNREFUSED`.
-- This demonstrates that HTTP error status codes can be captured as responses while a transport failure is represented separately as an execution error. A `401` or `500` response is not automatically a QA `FAIL` unless it is compared with that test case's expected behavior.
-- The workflow canvas reports a successful execution, and the Final QA Report node displays a structured output. This is evidence from the local n8n instance shown in the screenshots; it does **not** establish that every workflow in a fresh clone is fully configured or that every report classification and XLSX file write has been independently verified.
+### Workflow at a glance
 
-Sample input workbooks are available in [`test-scripts/`](test-scripts/), including [`qa_agent_integration_sample.xlsx`](test-scripts/qa_agent_integration_sample.xlsx) and the validation samples in [`test-scripts/samples/`](test-scripts/samples/). The screenshots are currently shared as submission evidence and have not been added as image assets to this repository.
+![Local n8n workflow showing the Excel-to-QA-report execution path](docs/images/n8n-workflow.png)
+
+*The visible workflow connects Excel ingestion and request building to HTTP execution, response handling/normalization, decision logic, failure analysis, the local Ollama model path, and the Final QA Report node.*
+
+### HTTP Executor: response and transport-error handling
+
+![HTTP Executor showing five successful HTTP responses and one error-branch item](docs/images/http-executor.png)
+
+The captured run shows **5 items on the success branch and 1 item on the error branch**. The HTTP responses include status codes **200, 201, 401, 500, and 204**; the deliberately unreachable endpoint returns `ECONNREFUSED`. HTTP status errors such as `401` and `500` are still responses; they should be classified against each test case's expected behavior. A transport failure with no HTTP response is a different condition and should be reported as **BLOCKED**, not automatically as a test failure.
+
+### Final QA Report node
+
+![Final QA Report node displaying structured AI analysis output](docs/images/final-qa-report.png)
+
+The screenshot confirms that the final node executed and produced a structured output. It does **not**, by itself, verify the final PASS/FAIL/BLOCKED counts or prove that an updated XLSX workbook was written successfully.
+
+### Sample input workbook
+
+Use the committed [QA Agent integration sample workbook](test-scripts/qa_agent_integration_sample.xlsx) as a starting input. Additional valid and invalid workbook fixtures are available in [`test-scripts/samples/`](test-scripts/samples/).
+
+**Evidence boundary:** These images document the shown local n8n run. The committed workflow exports, model/provider configuration, file paths, and native XLSX output behavior may differ from the local instance and still need fresh-clone/end-to-end verification. No generated final output workbook is linked here because one is not currently committed in the repository.
 
 ## Key engineering features
 
@@ -226,8 +243,7 @@ The schema and Compose setup are included as infrastructure foundations; the ful
 
 ### Defect lifecycle foundation (in progress)
 
-The additive persistence schema and lifecycle contract are available on the
-`feature/defect-approval-lifecycle` branch:
+The additive persistence schema and lifecycle contract have been merged into `main`:
 
 - `db/migrations/002_defect_lifecycle.sql` — defect drafts, active-fingerprint uniqueness, and audit events.
 - `docs/architecture/defect-lifecycle.md` — duplicate handling, explicit review states, and submission guard requirements.
